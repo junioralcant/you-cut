@@ -1,0 +1,7 @@
+{
+  "version": 3,
+  "duration_seconds": 30,
+  "speech_source": "/System/Library/AssetsV2/com_apple_MobileAsset_UAF_Siri_TextToSpeech/purpose_auto/2afc6d1be31d583ebf6d02cb69ebaef3e16d4361.asset/AssetData/pt-BR_nando.caf",
+  "video": "ffmpeg color blue 1280x720",
+  "tone": "ffmpeg sine 440Hz at low volume"
+}

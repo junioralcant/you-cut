@@ -1,0 +1,15 @@
+output/*
+!output/.gitkeep
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+dist/
+*.egg-info/
+.env
+.pytest_cache/
+*.log
+output
+tasks
+prompt.md

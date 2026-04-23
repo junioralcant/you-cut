@@ -1,0 +1,866 @@
+{
+  "md5": "1f0944dbe535b8b29e32d037cedb969a",
+  "result": {
+    "segments": [
+      {
+        "start": 0.0,
+        "end": 29.92,
+        "text": " Olá, meu nome é Sidie Escol é Vós que você quer que Use Olá, meu nome é Sidie Escol é Vós que você quer que Use Olá, meu nome é Sidie Escol é Vós que você quer que Use Olá, meu nome é Sidie Escol é Vós que você quer que Use Olá, meu nome é Sidie Escol é Vós que você quer que Use Olá, meu nome é Sidie Escol é Vós que você quer que Use Olá, meu nome é Sidie Escol é Vós que você quer que Use Olá, meu nome é Sidie Escol é Vós que você quer que Use Olá, meu nome é Sidie Escol é Vós que você quer que Use Olá, meu nome é Sidie Escol é Vós que você quer que Use Olá, meu nome é Sidie Escol é Vós que você quer que Use Olá, meu nome é Sidie Escol é Vós que você quer que Use Olá, meu nome é Sidie Escol é Vós que você quer que Use Olá,",
+        "words": [
+          {
+            "word": " Olá,",
+            "start": 0.0,
+            "end": 0.36
+          },
+          {
+            "word": " meu",
+            "start": 0.76,
+            "end": 0.82
+          },
+          {
+            "word": " nome",
+            "start": 0.82,
+            "end": 1.12
+          },
+          {
+            "word": " é",
+            "start": 1.12,
+            "end": 1.18
+          },
+          {
+            "word": " Sidie",
+            "start": 1.18,
+            "end": 1.6
+          },
+          {
+            "word": " Escol",
+            "start": 1.6,
+            "end": 1.96
+          },
+          {
+            "word": " é",
+            "start": 1.96,
+            "end": 2.08
+          },
+          {
+            "word": " Vós",
+            "start": 2.08,
+            "end": 2.28
+          },
+          {
+            "word": " que",
+            "start": 2.28,
+            "end": 2.38
+          },
+          {
+            "word": " você",
+            "start": 2.38,
+            "end": 2.62
+          },
+          {
+            "word": " quer",
+            "start": 2.62,
+            "end": 2.78
+          },
+          {
+            "word": " que",
+            "start": 2.78,
+            "end": 2.96
+          },
+          {
+            "word": " Use",
+            "start": 2.96,
+            "end": 3.3
+          },
+          {
+            "word": " Olá,",
+            "start": 3.3,
+            "end": 3.8
+          },
+          {
+            "word": " meu",
+            "start": 4.14,
+            "end": 4.22
+          },
+          {
+            "word": " nome",
+            "start": 4.22,
+            "end": 4.5
+          },
+          {
+            "word": " é",
+            "start": 4.5,
+            "end": 4.56
+          },
+          {
+            "word": " Sidie",
+            "start": 4.56,
+            "end": 5.04
+          },
+          {
+            "word": " Escol",
+            "start": 5.04,
+            "end": 5.32
+          },
+          {
+            "word": " é",
+            "start": 5.32,
+            "end": 5.46
+          },
+          {
+            "word": " Vós",
+            "start": 5.46,
+            "end": 5.66
+          },
+          {
+            "word": " que",
+            "start": 5.66,
+            "end": 5.76
+          },
+          {
+            "word": " você",
+            "start": 5.76,
+            "end": 6.0
+          },
+          {
+            "word": " quer",
+            "start": 6.0,
+            "end": 6.16
+          },
+          {
+            "word": " que",
+            "start": 6.16,
+            "end": 6.42
+          },
+          {
+            "word": " Use",
+            "start": 6.42,
+            "end": 6.7
+          },
+          {
+            "word": " Olá,",
+            "start": 6.7,
+            "end": 7.18
+          },
+          {
+            "word": " meu",
+            "start": 7.18,
+            "end": 7.6
+          },
+          {
+            "word": " nome",
+            "start": 7.6,
+            "end": 7.88
+          },
+          {
+            "word": " é",
+            "start": 7.88,
+            "end": 7.94
+          },
+          {
+            "word": " Sidie",
+            "start": 7.94,
+            "end": 8.42
+          },
+          {
+            "word": " Escol",
+            "start": 8.42,
+            "end": 8.7
+          },
+          {
+            "word": " é",
+            "start": 8.7,
+            "end": 8.86
+          },
+          {
+            "word": " Vós",
+            "start": 8.86,
+            "end": 9.04
+          },
+          {
+            "word": " que",
+            "start": 9.04,
+            "end": 9.16
+          },
+          {
+            "word": " você",
+            "start": 9.16,
+            "end": 9.38
+          },
+          {
+            "word": " quer",
+            "start": 9.38,
+            "end": 9.54
+          },
+          {
+            "word": " que",
+            "start": 9.54,
+            "end": 9.82
+          },
+          {
+            "word": " Use",
+            "start": 9.82,
+            "end": 10.08
+          },
+          {
+            "word": " Olá,",
+            "start": 10.08,
+            "end": 10.58
+          },
+          {
+            "word": " meu",
+            "start": 10.58,
+            "end": 10.98
+          },
+          {
+            "word": " nome",
+            "start": 10.98,
+            "end": 11.24
+          },
+          {
+            "word": " é",
+            "start": 11.24,
+            "end": 11.32
+          },
+          {
+            "word": " Sidie",
+            "start": 11.32,
+            "end": 11.8
+          },
+          {
+            "word": " Escol",
+            "start": 11.8,
+            "end": 12.08
+          },
+          {
+            "word": " é",
+            "start": 12.08,
+            "end": 12.24
+          },
+          {
+            "word": " Vós",
+            "start": 12.24,
+            "end": 12.42
+          },
+          {
+            "word": " que",
+            "start": 12.42,
+            "end": 12.76
+          },
+          {
+            "word": " você",
+            "start": 12.76,
+            "end": 12.76
+          },
+          {
+            "word": " quer",
+            "start": 12.76,
+            "end": 12.9
+          },
+          {
+            "word": " que",
+            "start": 12.9,
+            "end": 13.22
+          },
+          {
+            "word": " Use",
+            "start": 13.22,
+            "end": 13.46
+          },
+          {
+            "word": " Olá,",
+            "start": 13.46,
+            "end": 13.94
+          },
+          {
+            "word": " meu",
+            "start": 14.34,
+            "end": 14.38
+          },
+          {
+            "word": " nome",
+            "start": 14.38,
+            "end": 14.58
+          },
+          {
+            "word": " é",
+            "start": 14.58,
+            "end": 14.66
+          },
+          {
+            "word": " Sidie",
+            "start": 14.66,
+            "end": 15.14
+          },
+          {
+            "word": " Escol",
+            "start": 15.14,
+            "end": 15.48
+          },
+          {
+            "word": " é",
+            "start": 15.48,
+            "end": 15.6
+          },
+          {
+            "word": " Vós",
+            "start": 15.6,
+            "end": 15.76
+          },
+          {
+            "word": " que",
+            "start": 15.76,
+            "end": 18.18
+          },
+          {
+            "word": " você",
+            "start": 18.18,
+            "end": 19.5
+          },
+          {
+            "word": " quer",
+            "start": 19.5,
+            "end": 19.68
+          },
+          {
+            "word": " que",
+            "start": 19.68,
+            "end": 19.96
+          },
+          {
+            "word": " Use",
+            "start": 19.96,
+            "end": 20.24
+          },
+          {
+            "word": " Olá,",
+            "start": 20.24,
+            "end": 20.74
+          },
+          {
+            "word": " meu",
+            "start": 20.74,
+            "end": 21.12
+          },
+          {
+            "word": " nome",
+            "start": 21.12,
+            "end": 21.24
+          },
+          {
+            "word": " é",
+            "start": 21.24,
+            "end": 21.44
+          },
+          {
+            "word": " Sidie",
+            "start": 21.44,
+            "end": 21.86
+          },
+          {
+            "word": " Escol",
+            "start": 21.86,
+            "end": 22.22
+          },
+          {
+            "word": " é",
+            "start": 22.22,
+            "end": 22.42
+          },
+          {
+            "word": " Vós",
+            "start": 22.42,
+            "end": 22.5
+          },
+          {
+            "word": " que",
+            "start": 22.5,
+            "end": 22.5
+          },
+          {
+            "word": " você",
+            "start": 22.5,
+            "end": 22.5
+          },
+          {
+            "word": " quer",
+            "start": 22.5,
+            "end": 22.5
+          },
+          {
+            "word": " que",
+            "start": 22.5,
+            "end": 22.5
+          },
+          {
+            "word": " Use",
+            "start": 22.5,
+            "end": 22.5
+          },
+          {
+            "word": " Olá,",
+            "start": 22.5,
+            "end": 22.5
+          },
+          {
+            "word": " meu",
+            "start": 22.5,
+            "end": 22.5
+          },
+          {
+            "word": " nome",
+            "start": 22.5,
+            "end": 22.5
+          },
+          {
+            "word": " é",
+            "start": 22.5,
+            "end": 22.5
+          },
+          {
+            "word": " Sidie",
+            "start": 22.5,
+            "end": 22.5
+          },
+          {
+            "word": " Escol",
+            "start": 22.5,
+            "end": 22.5
+          },
+          {
+            "word": " é",
+            "start": 22.5,
+            "end": 22.5
+          },
+          {
+            "word": " Vós",
+            "start": 22.5,
+            "end": 22.52
+          },
+          {
+            "word": " que",
+            "start": 22.52,
+            "end": 22.66
+          },
+          {
+            "word": " você",
+            "start": 22.66,
+            "end": 22.88
+          },
+          {
+            "word": " quer",
+            "start": 22.88,
+            "end": 23.04
+          },
+          {
+            "word": " que",
+            "start": 23.04,
+            "end": 23.36
+          },
+          {
+            "word": " Use",
+            "start": 23.36,
+            "end": 23.62
+          },
+          {
+            "word": " Olá,",
+            "start": 23.62,
+            "end": 24.1
+          },
+          {
+            "word": " meu",
+            "start": 24.1,
+            "end": 24.5
+          },
+          {
+            "word": " nome",
+            "start": 24.5,
+            "end": 24.74
+          },
+          {
+            "word": " é",
+            "start": 24.74,
+            "end": 24.84
+          },
+          {
+            "word": " Sidie",
+            "start": 24.84,
+            "end": 25.3
+          },
+          {
+            "word": " Escol",
+            "start": 25.3,
+            "end": 25.62
+          },
+          {
+            "word": " é",
+            "start": 25.62,
+            "end": 25.8
+          },
+          {
+            "word": " Vós",
+            "start": 25.8,
+            "end": 25.96
+          },
+          {
+            "word": " que",
+            "start": 25.96,
+            "end": 25.96
+          },
+          {
+            "word": " você",
+            "start": 25.96,
+            "end": 25.96
+          },
+          {
+            "word": " quer",
+            "start": 25.96,
+            "end": 25.96
+          },
+          {
+            "word": " que",
+            "start": 25.96,
+            "end": 25.96
+          },
+          {
+            "word": " Use",
+            "start": 25.96,
+            "end": 25.96
+          },
+          {
+            "word": " Olá,",
+            "start": 25.96,
+            "end": 25.96
+          },
+          {
+            "word": " meu",
+            "start": 25.96,
+            "end": 25.96
+          },
+          {
+            "word": " nome",
+            "start": 25.96,
+            "end": 25.96
+          },
+          {
+            "word": " é",
+            "start": 25.96,
+            "end": 25.96
+          },
+          {
+            "word": " Sidie",
+            "start": 25.96,
+            "end": 25.96
+          },
+          {
+            "word": " Escol",
+            "start": 25.96,
+            "end": 25.96
+          },
+          {
+            "word": " é",
+            "start": 25.96,
+            "end": 25.96
+          },
+          {
+            "word": " Vós",
+            "start": 25.96,
+            "end": 25.96
+          },
+          {
+            "word": " que",
+            "start": 25.96,
+            "end": 26.26
+          },
+          {
+            "word": " você",
+            "start": 26.26,
+            "end": 26.28
+          },
+          {
+            "word": " quer",
+            "start": 26.28,
+            "end": 26.42
+          },
+          {
+            "word": " que",
+            "start": 26.42,
+            "end": 26.74
+          },
+          {
+            "word": " Use",
+            "start": 26.74,
+            "end": 27.02
+          },
+          {
+            "word": " Olá,",
+            "start": 27.02,
+            "end": 27.48
+          },
+          {
+            "word": " meu",
+            "start": 27.48,
+            "end": 27.48
+          },
+          {
+            "word": " nome",
+            "start": 27.48,
+            "end": 27.48
+          },
+          {
+            "word": " é",
+            "start": 27.48,
+            "end": 27.48
+          },
+          {
+            "word": " Sidie",
+            "start": 27.48,
+            "end": 27.48
+          },
+          {
+            "word": " Escol",
+            "start": 27.48,
+            "end": 27.48
+          },
+          {
+            "word": " é",
+            "start": 27.48,
+            "end": 27.48
+          },
+          {
+            "word": " Vós",
+            "start": 27.48,
+            "end": 27.48
+          },
+          {
+            "word": " que",
+            "start": 27.48,
+            "end": 27.48
+          },
+          {
+            "word": " você",
+            "start": 27.48,
+            "end": 27.48
+          },
+          {
+            "word": " quer",
+            "start": 27.48,
+            "end": 27.48
+          },
+          {
+            "word": " que",
+            "start": 27.48,
+            "end": 27.48
+          },
+          {
+            "word": " Use",
+            "start": 27.48,
+            "end": 27.48
+          },
+          {
+            "word": " Olá,",
+            "start": 27.48,
+            "end": 27.48
+          },
+          {
+            "word": " meu",
+            "start": 27.94,
+            "end": 27.94
+          },
+          {
+            "word": " nome",
+            "start": 27.94,
+            "end": 28.1
+          },
+          {
+            "word": " é",
+            "start": 28.1,
+            "end": 28.2
+          },
+          {
+            "word": " Sidie",
+            "start": 28.2,
+            "end": 28.68
+          },
+          {
+            "word": " Escol",
+            "start": 28.68,
+            "end": 29.0
+          },
+          {
+            "word": " é",
+            "start": 29.0,
+            "end": 29.48
+          },
+          {
+            "word": " Vós",
+            "start": 29.48,
+            "end": 29.58
+          },
+          {
+            "word": " que",
+            "start": 29.58,
+            "end": 29.58
+          },
+          {
+            "word": " você",
+            "start": 29.58,
+            "end": 29.58
+          },
+          {
+            "word": " quer",
+            "start": 29.58,
+            "end": 29.58
+          },
+          {
+            "word": " que",
+            "start": 29.58,
+            "end": 29.58
+          },
+          {
+            "word": " Use",
+            "start": 29.58,
+            "end": 29.58
+          },
+          {
+            "word": " Olá,",
+            "start": 29.58,
+            "end": 29.58
+          },
+          {
+            "word": " meu",
+            "start": 29.58,
+            "end": 29.58
+          },
+          {
+            "word": " nome",
+            "start": 29.58,
+            "end": 29.58
+          },
+          {
+            "word": " é",
+            "start": 29.58,
+            "end": 29.58
+          },
+          {
+            "word": " Sidie",
+            "start": 29.58,
+            "end": 29.58
+          },
+          {
+            "word": " Escol",
+            "start": 29.58,
+            "end": 29.58
+          },
+          {
+            "word": " é",
+            "start": 29.58,
+            "end": 29.58
+          },
+          {
+            "word": " Vós",
+            "start": 29.58,
+            "end": 29.58
+          },
+          {
+            "word": " que",
+            "start": 29.58,
+            "end": 29.58
+          },
+          {
+            "word": " você",
+            "start": 29.58,
+            "end": 29.58
+          },
+          {
+            "word": " quer",
+            "start": 29.58,
+            "end": 29.58
+          },
+          {
+            "word": " que",
+            "start": 29.58,
+            "end": 29.58
+          },
+          {
+            "word": " Use",
+            "start": 29.58,
+            "end": 29.58
+          },
+          {
+            "word": " Olá,",
+            "start": 29.58,
+            "end": 29.58
+          },
+          {
+            "word": " meu",
+            "start": 29.58,
+            "end": 29.58
+          },
+          {
+            "word": " nome",
+            "start": 29.58,
+            "end": 29.58
+          },
+          {
+            "word": " é",
+            "start": 29.58,
+            "end": 29.58
+          },
+          {
+            "word": " Sidie",
+            "start": 29.58,
+            "end": 29.58
+          },
+          {
+            "word": " Escol",
+            "start": 29.58,
+            "end": 29.58
+          },
+          {
+            "word": " é",
+            "start": 29.58,
+            "end": 29.58
+          },
+          {
+            "word": " Vós",
+            "start": 29.58,
+            "end": 29.58
+          },
+          {
+            "word": " que",
+            "start": 29.58,
+            "end": 29.62
+          },
+          {
+            "word": " você",
+            "start": 29.62,
+            "end": 29.86
+          },
+          {
+            "word": " quer",
+            "start": 29.86,
+            "end": 29.86
+          },
+          {
+            "word": " que",
+            "start": 29.86,
+            "end": 29.92
+          },
+          {
+            "word": " Use",
+            "start": 29.92,
+            "end": 29.92
+          },
+          {
+            "word": " Olá,",
+            "start": 29.92,
+            "end": 29.92
+          }
+        ]
+      }
+    ],
+    "language": "pt",
+    "source_path": "/Users/user/Documents/YouCut/tests/fixtures/sample.mp4"
+  }
+}
