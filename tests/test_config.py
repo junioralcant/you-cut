@@ -3,8 +3,9 @@ from pathlib import Path
 from pydantic import ValidationError
 
 
-def test_missing_api_key_raises_error(monkeypatch):
+def test_missing_api_key_raises_error(monkeypatch, tmp_path):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.chdir(tmp_path)
     from youcut.config import PipelineConfig
     with pytest.raises(ValidationError):
         PipelineConfig()
@@ -64,3 +65,17 @@ def test_dry_run_env_override(monkeypatch):
     from youcut.config import PipelineConfig
     config = PipelineConfig()
     assert config.dry_run is True
+
+
+def test_vertical_fill_mode_default(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    from youcut.config import PipelineConfig
+    config = PipelineConfig()
+    assert config.vertical_fill_mode == "fill_crop"
+
+
+def test_vertical_fill_mode_accepts_blur_background(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    from youcut.config import PipelineConfig
+    config = PipelineConfig(vertical_fill_mode="blur_background")
+    assert config.vertical_fill_mode == "blur_background"

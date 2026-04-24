@@ -16,6 +16,7 @@ from youcut.clipper import cut_clip
 from youcut.config import PipelineConfig
 from youcut.downloader import VideoDownloadError, download_video
 from youcut.exporter import export_metadata
+from youcut.preview import generate_clip_preview
 from youcut.transcriber import transcribe
 
 app = typer.Typer(name="youcut", help="Gerador automático de clipes virais a partir de vídeos longos")
@@ -58,6 +59,7 @@ def _check_ffmpeg() -> None:
 def _show_clips_table(
     clips: list,
     clip_paths: Optional[list[Path]] = None,
+    preview_paths: Optional[list[Optional[Path]]] = None,
     dry_run: bool = False,
 ) -> None:
     title = "Clipes Identificados (Dry Run — sem arquivos gerados)" if dry_run else "Clipes Gerados"
@@ -67,12 +69,19 @@ def _show_clips_table(
     table.add_column("Score", width=8, justify="center")
     if not dry_run:
         table.add_column("Arquivo")
+        table.add_column("Preview")
 
     for i, clip in enumerate(clips):
         row: list[str] = [str(i + 1), clip.title, f"{clip.viral_score:.1f}/10"]
         if not dry_run:
             path = str(clip_paths[i]) if clip_paths and i < len(clip_paths) else "N/A"
+            preview = (
+                str(preview_paths[i])
+                if preview_paths and i < len(preview_paths) and preview_paths[i]
+                else "N/A"
+            )
             row.append(path)
+            row.append(preview)
         table.add_row(*row)
 
     _console.print(table)
@@ -173,8 +182,9 @@ def run(
             _show_clips_table(viral_clips, dry_run=True)
             return
 
-        # Step 4: Cut clips
+        # Step 4: Cut clips and generate previews
         clip_paths: list[Path] = []
+        preview_paths: list[Optional[Path]] = []
         task_cut = progress.add_task("Cortando clipes...", total=len(viral_clips))
         for i, clip in enumerate(viral_clips):
             try:
@@ -186,6 +196,8 @@ def run(
                     Panel(str(e), title="[red]Erro ao cortar clipe[/red]", border_style="red")
                 )
                 raise typer.Exit(code=1)
+            preview = generate_clip_preview(video_path, clip, i, config)
+            preview_paths.append(preview.path if preview else None)
             progress.advance(task_cut)
         progress.update(task_cut, description="[green]Clipes cortados[/green]")
 
@@ -211,4 +223,4 @@ def run(
             progress.advance(task_exp)
         progress.update(task_exp, description="[green]Metadados exportados[/green]")
 
-    _show_clips_table(viral_clips, clip_paths=clip_paths)
+    _show_clips_table(viral_clips, clip_paths=clip_paths, preview_paths=preview_paths)

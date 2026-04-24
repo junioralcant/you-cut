@@ -1,10 +1,11 @@
+import logging
 import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from youcut.clipper import PADDING, check_ffmpeg, cut_clip
+from youcut.clipper import PADDING, build_vertical_fill_filter, check_ffmpeg, cut_clip
 from youcut.config import PipelineConfig
 from youcut.models import ViralClip
 
@@ -29,6 +30,25 @@ def viral_clip():
         hashtags=["#test"],
         thumbnail_idea="Test thumbnail",
     )
+
+
+class TestBuildVerticalFillFilter:
+    def test_contains_force_original_aspect_ratio_increase(self):
+        f = build_vertical_fill_filter()
+        assert "force_original_aspect_ratio=increase" in f
+
+    def test_contains_crop(self):
+        f = build_vertical_fill_filter()
+        assert "crop=1080:1920" in f
+
+    def test_no_pad(self):
+        f = build_vertical_fill_filter()
+        assert "pad=" not in f
+
+    def test_custom_dimensions(self):
+        f = build_vertical_fill_filter(width=720, height=1280)
+        assert "crop=720:1280" in f
+        assert "scale=720:1280" in f
 
 
 class TestCheckFfmpeg:
@@ -56,11 +76,35 @@ class TestCutClip:
         _, cmd = self._run_cut(video_path, viral_clip, 0, config)
         assert "scale=1080:1920" in " ".join(cmd)
 
-    def test_ffmpeg_command_includes_pad(self, config, viral_clip, tmp_path):
+    def test_default_filter_contains_increase(self, config, viral_clip, tmp_path):
         video_path = tmp_path / "video.mp4"
         video_path.touch()
         _, cmd = self._run_cut(video_path, viral_clip, 0, config)
-        assert "pad=1080:1920" in " ".join(cmd)
+        assert "force_original_aspect_ratio=increase" in " ".join(cmd)
+
+    def test_default_filter_contains_crop(self, config, viral_clip, tmp_path):
+        video_path = tmp_path / "video.mp4"
+        video_path.touch()
+        _, cmd = self._run_cut(video_path, viral_clip, 0, config)
+        assert "crop=1080:1920" in " ".join(cmd)
+
+    def test_default_filter_no_pad(self, config, viral_clip, tmp_path):
+        video_path = tmp_path / "video.mp4"
+        video_path.touch()
+        _, cmd = self._run_cut(video_path, viral_clip, 0, config)
+        assert "pad=1080:1920" not in " ".join(cmd)
+
+    def test_blur_background_path_preserved(self, tmp_path, viral_clip):
+        config = PipelineConfig(
+            anthropic_api_key="test-key",
+            output_dir=tmp_path / "output",
+            vertical_fill_mode="blur_background",
+        )
+        video_path = tmp_path / "video.mp4"
+        video_path.touch()
+        _, cmd = self._run_cut(video_path, viral_clip, 0, config)
+        assert "-filter_complex" in cmd
+        assert "boxblur" in " ".join(cmd)
 
     def test_padding_applied_to_start_time(self, config, viral_clip, tmp_path):
         video_path = tmp_path / "video.mp4"
@@ -140,6 +184,30 @@ class TestCutClip:
         _, cmd = self._run_cut(video_path, viral_clip, 0, config)
         assert "-filter_complex" in cmd
         assert "boxblur" in " ".join(cmd)
+
+    def test_blur_background_bool_emits_deprecation_warning(self, tmp_path, viral_clip, caplog):
+        config = PipelineConfig(
+            anthropic_api_key="test-key",
+            output_dir=tmp_path / "output",
+            blur_background=True,
+        )
+        video_path = tmp_path / "video.mp4"
+        video_path.touch()
+        with caplog.at_level(logging.WARNING, logger="youcut.clipper"):
+            self._run_cut(video_path, viral_clip, 0, config)
+        assert "depreciado" in caplog.text
+
+    def test_vertical_fill_mode_blur_background_no_deprecation_warning(self, tmp_path, viral_clip, caplog):
+        config = PipelineConfig(
+            anthropic_api_key="test-key",
+            output_dir=tmp_path / "output",
+            vertical_fill_mode="blur_background",
+        )
+        video_path = tmp_path / "video.mp4"
+        video_path.touch()
+        with caplog.at_level(logging.WARNING, logger="youcut.clipper"):
+            self._run_cut(video_path, viral_clip, 0, config)
+        assert "depreciado" not in caplog.text
 
     def test_default_uses_vf_not_filter_complex(self, config, viral_clip, tmp_path):
         video_path = tmp_path / "video.mp4"

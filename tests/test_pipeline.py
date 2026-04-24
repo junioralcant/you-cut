@@ -205,6 +205,115 @@ class TestPipelineIntegration:
 
 
 # ---------------------------------------------------------------------------
+# Vertical fill pipeline tests (mock-based, no FFmpeg required)
+# ---------------------------------------------------------------------------
+
+class TestPipelineVerticalFill:
+    """Validate vertical fill behavior via command inspection — no FFmpeg required."""
+
+    @pytest.fixture
+    def vf_config(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+        from youcut.config import PipelineConfig
+        return PipelineConfig(output_dir=tmp_path / "output")
+
+    @pytest.fixture
+    def video_path(self, tmp_path):
+        p = tmp_path / "testvideo.mp4"
+        p.write_bytes(b"\x00" * 100)
+        return p
+
+    @pytest.fixture
+    def mock_clip(self):
+        from youcut.models import ViralClip
+        return ViralClip(
+            title="Test Clip",
+            reason="test",
+            viral_score=8.0,
+            start_time=5.0,
+            end_time=25.0,
+            description="desc",
+            hashtags=["#test"],
+            thumbnail_idea="thumb",
+        )
+
+    def test_pipeline_clip_resolution_1080x1920(self, vf_config, video_path, mock_clip):
+        """Default fill_crop command targets 1080x1920 with scale+crop filter (no ffprobe needed)."""
+        from youcut.clipper import cut_clip
+
+        with patch("youcut.clipper.shutil.which", return_value="/usr/bin/ffmpeg"), \
+             patch("youcut.clipper.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0)
+            cut_clip(video_path, mock_clip, 0, vf_config)
+
+        full_cmd = " ".join(mock_run.call_args[0][0])
+        assert "1080" in full_cmd
+        assert "1920" in full_cmd
+        assert "crop=1080:1920" in full_cmd
+
+    def test_pipeline_no_black_pad_in_default(self, vf_config, video_path, mock_clip):
+        """Default fill_crop mode must not include pad=1080:1920 in the FFmpeg command."""
+        from youcut.clipper import cut_clip
+
+        with patch("youcut.clipper.shutil.which", return_value="/usr/bin/ffmpeg"), \
+             patch("youcut.clipper.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0)
+            cut_clip(video_path, mock_clip, 0, vf_config)
+
+        full_cmd = " ".join(mock_run.call_args[0][0])
+        assert "pad=1080:1920" not in full_cmd
+
+    def test_pipeline_preview_artifact_exists(self, vf_config, video_path, mock_clip):
+        """Preview artifact is created in the same directory as the clip."""
+        from youcut.preview import generate_clip_preview
+
+        def _fake_ffmpeg(cmd, **kwargs):
+            out = Path(cmd[-1])
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_bytes(b"\xff\xd8\xff")
+            return MagicMock(returncode=0)
+
+        with patch("youcut.preview.subprocess.run", side_effect=_fake_ffmpeg):
+            artifact = generate_clip_preview(video_path, mock_clip, 0, vf_config)
+
+        expected_dir = vf_config.output_dir / video_path.stem
+        assert artifact is not None
+        assert artifact.path.exists()
+        assert artifact.path.parent == expected_dir
+        assert artifact.path.name == "clip_01_preview.jpg"
+
+    def test_pipeline_preview_filter_parity(self, vf_config, video_path, mock_clip):
+        """Preview uses exactly the same filter as the export (same builder)."""
+        from youcut.clipper import build_vertical_fill_filter
+        from youcut.preview import generate_clip_preview
+
+        with patch("youcut.preview.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0)
+            generate_clip_preview(video_path, mock_clip, 0, vf_config)
+
+        cmd = mock_run.call_args[0][0]
+        vf_index = cmd.index("-vf") + 1
+        preview_filter = cmd[vf_index]
+
+        assert preview_filter == build_vertical_fill_filter()
+
+    def test_pipeline_blur_background_still_works(self, vf_config, video_path, mock_clip):
+        """Legacy blur_background mode completes without error and emits boxblur filter."""
+        from youcut.clipper import cut_clip
+
+        blur_config = vf_config.model_copy(update={"vertical_fill_mode": "blur_background"})
+
+        with patch("youcut.clipper.shutil.which", return_value="/usr/bin/ffmpeg"), \
+             patch("youcut.clipper.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0)
+            result = cut_clip(video_path, mock_clip, 0, blur_config)
+
+        assert result is not None
+        full_cmd = " ".join(mock_run.call_args[0][0])
+        assert "boxblur" in full_cmd
+
+
+# ---------------------------------------------------------------------------
 # Error path tests (no FFmpeg or real fixture required)
 # ---------------------------------------------------------------------------
 
@@ -219,9 +328,10 @@ class TestPipelineErrorPaths:
             with pytest.raises(RuntimeError, match="FFmpeg não encontrado"):
                 check_ffmpeg()
 
-    def test_missing_api_key_fails_before_processing(self, monkeypatch):
+    def test_missing_api_key_fails_before_processing(self, monkeypatch, tmp_path):
         """PipelineConfig raises ValidationError immediately when ANTHROPIC_API_KEY is absent."""
         monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        monkeypatch.chdir(tmp_path)
         from pydantic import ValidationError
         from youcut.config import PipelineConfig
 

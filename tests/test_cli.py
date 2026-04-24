@@ -76,6 +76,7 @@ def _mock_pipeline(
     if add_captions_side_effect is not None:
         mock_caption.side_effect = add_captions_side_effect
     mock_export = MagicMock(return_value=Path("clip_01.txt"))
+    mock_preview = MagicMock(return_value=MagicMock(path=Path("clip_01_preview.jpg")))
 
     return {
         "download": mock_download,
@@ -84,6 +85,7 @@ def _mock_pipeline(
         "cut_clip": mock_cut,
         "add_captions": mock_caption,
         "export_metadata": mock_export,
+        "generate_clip_preview": mock_preview,
     }
 
 
@@ -97,6 +99,7 @@ def _run_with_mocks(mocks: dict, extra_args: list[str] | None = None) -> "Result
         patch("youcut.cli.cut_clip", mocks["cut_clip"]),
         patch("youcut.cli.add_captions", mocks["add_captions"]),
         patch("youcut.cli.export_metadata", mocks["export_metadata"]),
+        patch("youcut.cli.generate_clip_preview", mocks["generate_clip_preview"]),
     ):
         return runner.invoke(app, args, env=API_ENV)
 
@@ -167,13 +170,17 @@ class TestAPIKeyValidation:
             result = runner.invoke(app, ["run", "video.mp4"])
         assert result.exit_code != 0
 
-    def test_missing_api_key_friendly_message(self):
+    def test_missing_api_key_friendly_message(self, monkeypatch, tmp_path):
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        monkeypatch.chdir(tmp_path)
         with patch("shutil.which", return_value="/usr/bin/ffmpeg"):
             result = runner.invoke(app, ["run", "video.mp4"])
         output = result.output
         assert "ANTHROPIC_API_KEY" in output or "configuração" in output.lower() or "api" in output.lower()
 
-    def test_missing_api_key_no_pipeline_started(self):
+    def test_missing_api_key_no_pipeline_started(self, monkeypatch, tmp_path):
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        monkeypatch.chdir(tmp_path)
         mock_download = MagicMock()
         with (
             patch("shutil.which", return_value="/usr/bin/ffmpeg"),
@@ -191,11 +198,13 @@ class TestPipelineOrder:
     def test_pipeline_runs_in_correct_order(self):
         call_order: list[str] = []
 
+        mock_preview_artifact = MagicMock(path=Path("clip_01_preview.jpg"))
         mocks = _mock_pipeline()
         mocks["download"].side_effect = lambda *a, **kw: (call_order.append("download"), Path("video.mp4"))[1]
         mocks["transcribe"].side_effect = lambda *a, **kw: (call_order.append("transcribe"), _make_transcription())[1]
         mocks["analyze"].side_effect = lambda *a, **kw: (call_order.append("analyze"), [_make_clip()])[1]
         mocks["cut_clip"].side_effect = lambda *a, **kw: (call_order.append("cut_clip"), Path("video.mp4"))[1]
+        mocks["generate_clip_preview"].side_effect = lambda *a, **kw: (call_order.append("generate_clip_preview"), mock_preview_artifact)[1]
         mocks["add_captions"].side_effect = lambda *a, **kw: (call_order.append("add_captions"), Path("video.mp4"))[1]
         mocks["export_metadata"].side_effect = lambda *a, **kw: (call_order.append("export_metadata"), Path("clip_01.txt"))[1]
 
@@ -207,6 +216,7 @@ class TestPipelineOrder:
             "transcribe",
             "analyze",
             "cut_clip",
+            "generate_clip_preview",
             "add_captions",
             "export_metadata",
         ]
@@ -220,6 +230,7 @@ class TestPipelineOrder:
         mocks["transcribe"].assert_called_once()
         mocks["analyze"].assert_called_once()
         mocks["cut_clip"].assert_called_once()
+        mocks["generate_clip_preview"].assert_called_once()
         mocks["add_captions"].assert_called_once()
         mocks["export_metadata"].assert_called_once()
 
@@ -375,3 +386,29 @@ class TestLogging:
         mocks = _mock_pipeline()
         result = _run_with_mocks(mocks, extra_args=["--log-level", "DEBUG"])
         assert result.exit_code == 0
+
+
+# ---------------------------------------------------------------------------
+# 8.9 — Preview integration
+# ---------------------------------------------------------------------------
+
+class TestPreviewIntegration:
+    def test_cli_requests_preview_in_normal_flow(self):
+        mocks = _mock_pipeline()
+        result = _run_with_mocks(mocks)
+        assert result.exit_code == 0
+        mocks["generate_clip_preview"].assert_called_once()
+
+    def test_cli_dry_run_no_preview(self):
+        mocks = _mock_pipeline()
+        _run_with_mocks(mocks, extra_args=["--dry-run"])
+        mocks["generate_clip_preview"].assert_not_called()
+
+    def test_cli_preview_path_shown_in_output(self):
+        preview_path = Path("clip_01_preview.jpg")
+        mock_artifact = MagicMock(path=preview_path)
+        mocks = _mock_pipeline()
+        mocks["generate_clip_preview"].return_value = mock_artifact
+        result = _run_with_mocks(mocks)
+        assert result.exit_code == 0
+        assert "preview" in result.output.lower() or str(preview_path) in result.output

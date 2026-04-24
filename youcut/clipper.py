@@ -10,17 +10,16 @@ logger = logging.getLogger(__name__)
 
 PADDING = 0.1
 
-_BLACK_PAD_FILTER = (
-    "scale=1080:1920:force_original_aspect_ratio=decrease,"
-    "pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black"
-)
-
 _BLUR_BG_FILTER = (
     "[0:v]scale=1080:1920:force_original_aspect_ratio=increase,"
     "crop=1080:1920,boxblur=20:5[bg];"
     "[0:v]scale=1080:1920:force_original_aspect_ratio=decrease[fg];"
     "[bg][fg]overlay=(W-w)/2:(H-h)/2[v]"
 )
+
+
+def build_vertical_fill_filter(width: int = 1080, height: int = 1920) -> str:
+    return f"scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height}"
 
 
 def check_ffmpeg() -> None:
@@ -44,7 +43,14 @@ def cut_clip(
 
     output_path = output_dir / f"clip_{index + 1:02d}.mp4"
 
+    use_blur = config.blur_background or config.vertical_fill_mode == "blur_background"
     if config.blur_background:
+        logger.warning(
+            "O campo 'blur_background' está depreciado. Use vertical_fill_mode='blur_background'."
+        )
+    strategy = "blur_background" if use_blur else "fill_crop"
+    logger.info("Estratégia de enquadramento vertical: %s", strategy)
+    if use_blur:
         cmd = [
             "ffmpeg",
             "-ss", str(start),
@@ -64,7 +70,7 @@ def cut_clip(
             "-ss", str(start),
             "-i", str(video_path),
             "-t", str(duration),
-            "-vf", _BLACK_PAD_FILTER,
+            "-vf", build_vertical_fill_filter(),
             "-c:v", "libx264",
             "-c:a", "aac",
             "-y",

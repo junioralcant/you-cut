@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 import yt_dlp
@@ -15,6 +16,7 @@ def download_video(source: str, output_dir: Path) -> Path:
 
 
 def _download_from_url(url: str, output_dir: Path) -> Path:
+    url = re.sub(r"\\(.)", r"\1", url)  # strip shell escape backslashes, e.g. \? → ?
     output_dir.mkdir(parents=True, exist_ok=True)
     outtmpl = str(output_dir / "%(title)s.%(ext)s")
 

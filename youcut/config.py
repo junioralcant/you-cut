@@ -20,6 +20,7 @@ class PipelineConfig(BaseSettings):
     output_dir: Path = Path("output")
     dry_run: bool = False
     blur_background: bool = False
+    vertical_fill_mode: Literal["fill_crop", "blur_background"] = "fill_crop"
 
     @model_validator(mode="after")
     def validate_api_key_present(self) -> "PipelineConfig":
