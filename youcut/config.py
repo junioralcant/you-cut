@@ -10,6 +10,7 @@ class PipelineConfig(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
+        extra="ignore",
     )
 
     anthropic_api_key: str | None = None
@@ -21,6 +22,10 @@ class PipelineConfig(BaseSettings):
     dry_run: bool = False
     blur_background: bool = False
     vertical_fill_mode: Literal["fill_crop", "blur_background"] = "fill_crop"
+    title_overlay: bool = False
+    upload: bool = False
+    platforms: list[str] = ["youtube", "instagram", "tiktok"]
+    clips: list[int] | None = None
 
     @model_validator(mode="after")
     def validate_api_key_present(self) -> "PipelineConfig":

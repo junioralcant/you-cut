@@ -9,15 +9,36 @@ O fluxo atual da aplicação:
 3. envia a transcrição para o Claude identificar os melhores trechos;
 4. corta os clipes em formato vertical `1080x1920`;
 5. adiciona legendas embutidas;
-6. exporta metadados prontos para publicação.
+6. (opcional) queima o título nos primeiros 5 segundos com `--title-overlay`;
+7. exporta metadados prontos para publicação.
 
 ## Requisitos
 
 - Python `3.11+`
-- `ffmpeg` instalado e disponível no `PATH`
+- `ffmpeg 8.1+` compilado com `--enable-libass`, instalado e disponível no `PATH`
 - chave da API da Anthropic
 
 ## Instalação
+
+### ffmpeg com libass (obrigatório)
+
+O projeto usa `libass` para renderizar legendas ASS/SSA diretamente no vídeo. O `ffmpeg` padrão do Homebrew **não inclui** essa lib — instale via tap específico:
+
+```bash
+brew tap homebrew-ffmpeg/ffmpeg
+brew install homebrew-ffmpeg/ffmpeg/ffmpeg
+```
+
+Verifique se a instalação está correta:
+
+```bash
+ffmpeg -buildconf 2>/dev/null | grep libass
+# deve retornar: --enable-libass
+```
+
+> **macOS:** antes de instalar, certifique-se de que o Xcode Command Line Tools está atualizado (`sudo xcode-select --install`). O tap `homebrew-ffmpeg` compila o ffmpeg do source e exige ferramentas de build atualizadas.
+
+### Dependências Python
 
 Clone o projeto e instale as dependências:
 
@@ -81,6 +102,12 @@ Gerando 3 clipes:
 youcut run "./meu-video.mp4" --clips 3
 ```
 
+Gerando 3 clipes com a flag explícita:
+
+```bash
+youcut run "./meu-video.mp4" --clip-count 3
+```
+
 Usando legenda por frase:
 
 ```bash
@@ -91,6 +118,12 @@ Executando apenas a análise, sem gerar vídeos:
 
 ```bash
 youcut run "./meu-video.mp4" --dry-run
+```
+
+Queimando o título no início de cada clipe:
+
+```bash
+youcut run "./meu-video.mp4" --title-overlay
 ```
 
 Salvando logs em arquivo:
@@ -107,11 +140,42 @@ youcut run SOURCE [OPTIONS]
 
 Opções disponíveis:
 
-- `--clips`, `-n`: quantidade de clipes a gerar
+- `--clips`: sem `--upload`, mantém o comportamento legado de quantidade de clipes; com `--upload`, seleciona `all` ou índices como `1,3`
+- `--clip-count`, `--count`, `-n`: quantidade explícita de clipes a gerar
 - `--style`, `-s`: estilo da legenda, `word` ou `phrase`
 - `--dry-run`: analisa os trechos sem exportar clipes
+- `--title-overlay`: queima o título sugerido nos primeiros 5 segundos de cada clipe
+- `--upload`: publica automaticamente os clipes ao final do pipeline
+- `--platforms`: define as plataformas de upload (`youtube`, `instagram`, `tiktok` ou `all`)
 - `--log-level`: nível de log, como `DEBUG`, `INFO`, `WARNING` ou `ERROR`
 - `--log-file`: salva os logs em arquivo
+
+## Upload Automático
+
+Use `--upload` para publicar os clipes gerados sem intervenção manual ao final do pipeline. O upload reutiliza os metadados exportados em cada `clip_N.txt` e suporta seleção de plataformas com `--platforms` e seleção de clipes com `--clips`.
+
+Flags principais:
+
+- `--upload`: ativa a etapa de publicação após a geração dos clipes
+- `--platforms`: aceita `youtube`, `instagram`, `tiktok` ou `all`
+- `--clips`: com `--upload`, aceita `all` ou uma lista de índices como `1,3`
+
+Exemplos:
+
+```bash
+youcut run <url> --upload --platforms all
+youcut run <url> --upload --platforms youtube --clips 1,3
+```
+
+### Autenticação
+
+Autentique cada plataforma antes do primeiro upload, ou deixe o fluxo pedir login quando necessário:
+
+```bash
+youcut auth login --platform youtube
+youcut auth revoke --platform instagram
+youcut auth status
+```
 
 ## Saída gerada
 
@@ -164,8 +228,10 @@ youcut/
   analyzer.py
   clipper.py
   captioner.py
+  title_overlay.py
   exporter.py
   config.py
+  assets/
 tests/
 ```
 
@@ -176,4 +242,5 @@ tests/
 - `analyzer.py`: usa Claude para escolher os melhores trechos
 - `clipper.py`: corta e adapta o vídeo para formato vertical
 - `captioner.py`: gera e embute legendas
+- `title_overlay.py`: queima o título nos primeiros 5s do clipe (ativado com `--title-overlay`)
 - `exporter.py`: salva os metadados de publicação

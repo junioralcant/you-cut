@@ -13,3 +13,5 @@ dist/
 output
 tasks
 prompt.md
+.agents
+youtube-oauth.json

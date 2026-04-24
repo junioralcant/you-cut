@@ -77,6 +77,8 @@ def _mock_pipeline(
         mock_caption.side_effect = add_captions_side_effect
     mock_export = MagicMock(return_value=Path("clip_01.txt"))
     mock_preview = MagicMock(return_value=MagicMock(path=Path("clip_01_preview.jpg")))
+    mock_title_overlay = MagicMock(return_value=video_path)
+    mock_upload = MagicMock(return_value=[])
 
     return {
         "download": mock_download,
@@ -86,6 +88,8 @@ def _mock_pipeline(
         "add_captions": mock_caption,
         "export_metadata": mock_export,
         "generate_clip_preview": mock_preview,
+        "add_title_overlay": mock_title_overlay,
+        "upload_clips": mock_upload,
     }
 
 
@@ -100,6 +104,8 @@ def _run_with_mocks(mocks: dict, extra_args: list[str] | None = None) -> "Result
         patch("youcut.cli.add_captions", mocks["add_captions"]),
         patch("youcut.cli.export_metadata", mocks["export_metadata"]),
         patch("youcut.cli.generate_clip_preview", mocks["generate_clip_preview"]),
+        patch("youcut.cli.add_title_overlay", mocks["add_title_overlay"]),
+        patch("youcut.cli.upload_clips", mocks["upload_clips"]),
     ):
         return runner.invoke(app, args, env=API_ENV)
 
@@ -119,6 +125,10 @@ class TestCliHelp:
 
     def test_help_shows_clips_option(self):
         result = runner.invoke(app, ["run", "--help"])
+        assert "--clip-count" in result.output
+
+    def test_help_shows_upload_clips_option(self):
+        result = runner.invoke(app, ["run", "--help"])
         assert "--clips" in result.output
 
     def test_help_shows_style_option(self):
@@ -136,6 +146,10 @@ class TestCliHelp:
     def test_help_shows_log_file_option(self):
         result = runner.invoke(app, ["run", "--help"])
         assert "--log-file" in result.output
+
+    def test_help_shows_title_overlay_option(self):
+        result = runner.invoke(app, ["run", "--help"])
+        assert "--title-overlay" in result.output
 
 
 # ---------------------------------------------------------------------------
@@ -412,3 +426,212 @@ class TestPreviewIntegration:
         result = _run_with_mocks(mocks)
         assert result.exit_code == 0
         assert "preview" in result.output.lower() or str(preview_path) in result.output
+
+
+# ---------------------------------------------------------------------------
+# 8.10 — Title overlay flag
+# ---------------------------------------------------------------------------
+
+class TestTitleOverlay:
+    def test_without_flag_title_overlay_not_called(self):
+        mocks = _mock_pipeline()
+        result = _run_with_mocks(mocks)
+        assert result.exit_code == 0
+        mocks["add_title_overlay"].assert_not_called()
+
+    def test_with_flag_title_overlay_called_for_each_clip(self):
+        clips = [_make_clip("Clipe A"), _make_clip("Clipe B")]
+        mocks = _mock_pipeline(clips=clips)
+        result = _run_with_mocks(mocks, extra_args=["--title-overlay"])
+        assert result.exit_code == 0
+        assert mocks["add_title_overlay"].call_count == len(clips)
+
+    def test_with_flag_title_overlay_called_with_correct_args(self):
+        clip = _make_clip("Meu Título")
+        video_path = Path("video.mp4")
+        mocks = _mock_pipeline(clips=[clip], video_path=video_path)
+        result = _run_with_mocks(mocks, extra_args=["--title-overlay"])
+        assert result.exit_code == 0
+        call_args = mocks["add_title_overlay"].call_args
+        _, called_clip, called_config = call_args.args
+        assert called_clip is clip
+        assert called_config.title_overlay is True
+
+    def test_with_flag_exits_zero(self):
+        mocks = _mock_pipeline()
+        result = _run_with_mocks(mocks, extra_args=["--title-overlay"])
+        assert result.exit_code == 0
+
+    def test_title_overlay_error_exits_nonzero(self):
+        mocks = _mock_pipeline()
+        mocks["add_title_overlay"].side_effect = RuntimeError("Overlay falhou")
+        result = _run_with_mocks(mocks, extra_args=["--title-overlay"])
+        assert result.exit_code != 0
+
+    def test_dry_run_with_title_overlay_does_not_call_overlay(self):
+        mocks = _mock_pipeline()
+        result = _run_with_mocks(mocks, extra_args=["--dry-run", "--title-overlay"])
+        assert result.exit_code == 0
+        mocks["add_title_overlay"].assert_not_called()
+
+    def test_pipeline_order_with_title_overlay(self):
+        call_order: list[str] = []
+
+        mock_preview_artifact = MagicMock(path=Path("clip_01_preview.jpg"))
+        mocks = _mock_pipeline()
+        mocks["download"].side_effect = lambda *a, **kw: (call_order.append("download"), Path("video.mp4"))[1]
+        mocks["transcribe"].side_effect = lambda *a, **kw: (call_order.append("transcribe"), _make_transcription())[1]
+        mocks["analyze"].side_effect = lambda *a, **kw: (call_order.append("analyze"), [_make_clip()])[1]
+        mocks["cut_clip"].side_effect = lambda *a, **kw: (call_order.append("cut_clip"), Path("video.mp4"))[1]
+        mocks["generate_clip_preview"].side_effect = lambda *a, **kw: (call_order.append("generate_clip_preview"), mock_preview_artifact)[1]
+        mocks["add_captions"].side_effect = lambda *a, **kw: (call_order.append("add_captions"), Path("video.mp4"))[1]
+        mocks["add_title_overlay"].side_effect = lambda *a, **kw: (call_order.append("add_title_overlay"), Path("video.mp4"))[1]
+        mocks["export_metadata"].side_effect = lambda *a, **kw: (call_order.append("export_metadata"), Path("clip_01.txt"))[1]
+
+        result = _run_with_mocks(mocks, extra_args=["--title-overlay"])
+
+        assert result.exit_code == 0
+        assert call_order == [
+            "download",
+            "transcribe",
+            "analyze",
+            "cut_clip",
+            "generate_clip_preview",
+            "add_captions",
+            "add_title_overlay",
+            "export_metadata",
+        ]
+
+
+# ---------------------------------------------------------------------------
+# 8.11 — Upload integration
+# ---------------------------------------------------------------------------
+
+class TestUploadIntegration:
+    def test_run_without_upload_does_not_call_upload_clips(self):
+        mocks = _mock_pipeline()
+        result = _run_with_mocks(mocks)
+        assert result.exit_code == 0
+        mocks["upload_clips"].assert_not_called()
+
+    def test_run_with_upload_calls_upload_clips_for_all_platforms(self):
+        mocks = _mock_pipeline()
+        result = _run_with_mocks(mocks, extra_args=["--upload", "--platforms", "all"])
+
+        assert result.exit_code == 0
+        kwargs = mocks["upload_clips"].call_args.kwargs
+        assert kwargs["platforms"] == ["youtube", "instagram", "tiktok"]
+        assert kwargs["clips_filter"] is None
+
+    def test_run_with_upload_and_specific_clips_passes_sorted_deduplicated_filter(self):
+        clips = [_make_clip("A"), _make_clip("B"), _make_clip("C")]
+        mocks = _mock_pipeline(clips=clips)
+        result = _run_with_mocks(
+            mocks,
+            extra_args=["--upload", "--platforms", "youtube", "--clips", "3,1,3"],
+        )
+
+        assert result.exit_code == 0
+        kwargs = mocks["upload_clips"].call_args.kwargs
+        assert kwargs["platforms"] == ["youtube"]
+        assert kwargs["clips_filter"] == [1, 3]
+
+    def test_run_with_upload_uses_clip_count_from_explicit_flag(self):
+        clips = [_make_clip(f"Clipe {i}") for i in range(6)]
+        mocks = _mock_pipeline(clips=clips)
+        result = _run_with_mocks(
+            mocks,
+            extra_args=["--upload", "--clip-count", "2", "--clips", "all"],
+        )
+
+        assert result.exit_code == 0
+        assert mocks["cut_clip"].call_count == 2
+
+    def test_invalid_platforms_exit_nonzero_before_processing(self):
+        mocks = _mock_pipeline()
+        result = _run_with_mocks(mocks, extra_args=["--upload", "--platforms", "xyz"])
+
+        assert result.exit_code != 0
+        assert "platform" in result.output.lower() or "plataforma" in result.output.lower()
+        mocks["download"].assert_not_called()
+
+    def test_invalid_upload_clips_exit_nonzero_before_processing(self):
+        mocks = _mock_pipeline()
+        result = _run_with_mocks(mocks, extra_args=["--upload", "--clips", "abc"])
+
+        assert result.exit_code != 0
+        assert "--clips" in result.output or "índices" in result.output.lower()
+        mocks["download"].assert_not_called()
+
+    def test_invalid_non_upload_clips_exit_nonzero_before_processing(self):
+        mocks = _mock_pipeline()
+        result = _run_with_mocks(mocks, extra_args=["--clips", "1,3"])
+
+        assert result.exit_code != 0
+        assert "comportamento legado" in result.output.lower() or "--upload" in result.output.lower()
+        mocks["download"].assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# 8.12 — Auth subcommands
+# ---------------------------------------------------------------------------
+
+class TestAuthCommands:
+    def test_auth_login_youtube_calls_authenticate(self):
+        fake_uploader = MagicMock()
+        with patch("youcut.cli.YouTubeUploader", return_value=fake_uploader):
+            result = runner.invoke(app, ["auth", "login", "--platform", "youtube"], env=API_ENV)
+
+        assert result.exit_code == 0
+        fake_uploader.authenticate.assert_called_once()
+
+    def test_auth_login_youtube_reads_client_secrets_from_dotenv(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv("YOUTUBE_CLIENT_SECRETS_FILE", raising=False)
+        (tmp_path / ".env").write_text(
+            "YOUTUBE_CLIENT_SECRETS_FILE=oauth/client_secret.json\n",
+            encoding="utf-8",
+        )
+
+        fake_uploader = MagicMock()
+        with patch("youcut.cli.YouTubeUploader", return_value=fake_uploader) as mock_youtube_uploader:
+            result = runner.invoke(
+                app,
+                ["auth", "login", "--platform", "youtube"],
+                env=API_ENV,
+            )
+
+        assert result.exit_code == 0
+        mock_youtube_uploader.assert_called_once_with(
+            token_dir=Path.home() / ".youcut" / "credentials",
+            client_secrets_file=Path("oauth/client_secret.json"),
+        )
+        fake_uploader.authenticate.assert_called_once()
+
+    def test_auth_login_instagram_calls_authenticate(self):
+        fake_uploader = MagicMock()
+        with patch("youcut.cli.InstagramUploader", return_value=fake_uploader):
+            result = runner.invoke(app, ["auth", "login", "--platform", "instagram"], env=API_ENV)
+
+        assert result.exit_code == 0
+        fake_uploader.authenticate.assert_called_once()
+
+    def test_auth_revoke_instagram_calls_revoke_token(self):
+        with patch("youcut.cli.revoke_token") as mock_revoke:
+            result = runner.invoke(app, ["auth", "revoke", "--platform", "instagram"], env=API_ENV)
+
+        assert result.exit_code == 0
+        mock_revoke.assert_called_once()
+        assert mock_revoke.call_args.args[0] == "instagram"
+
+    def test_auth_status_shows_three_platforms(self):
+        with patch(
+            "youcut.cli.get_token",
+            side_effect=lambda platform, _: {"token": "x"} if platform in {"youtube", "tiktok"} else None,
+        ):
+            result = runner.invoke(app, ["auth", "status"], env=API_ENV)
+
+        assert result.exit_code == 0
+        assert "youtube" in result.output
+        assert "instagram" in result.output
+        assert "tiktok" in result.output

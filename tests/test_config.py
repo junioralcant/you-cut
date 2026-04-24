@@ -26,6 +26,9 @@ def test_default_values(monkeypatch):
     assert config.output_dir == Path("output")
     assert config.whisper_model == "medium"
     assert config.dry_run is False
+    assert config.upload is False
+    assert config.platforms == ["youtube", "instagram", "tiktok"]
+    assert config.clips is None
 
 
 def test_env_overrides_defaults(monkeypatch):
@@ -43,6 +46,20 @@ def test_env_overrides_defaults(monkeypatch):
     assert config.subtitle_style == "phrase"
     assert config.output_dir == Path("/tmp/clips")
     assert config.anthropic_api_key == "my-real-key"
+
+
+def test_extra_upload_env_vars_are_ignored(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setenv("YOUTUBE_CLIENT_SECRETS_FILE", "/tmp/client_secret.json")
+    monkeypatch.setenv("INSTAGRAM_APP_ID", "abc")
+    monkeypatch.setenv("INSTAGRAM_APP_SECRET", "def")
+    monkeypatch.setenv("TIKTOK_CLIENT_KEY", "ghi")
+
+    from youcut.config import PipelineConfig
+    config = PipelineConfig()
+
+    assert config.anthropic_api_key == "test-key"
+    assert config.upload is False
 
 
 def test_api_key_loaded(monkeypatch):
@@ -79,3 +96,35 @@ def test_vertical_fill_mode_accepts_blur_background(monkeypatch):
     from youcut.config import PipelineConfig
     config = PipelineConfig(vertical_fill_mode="blur_background")
     assert config.vertical_fill_mode == "blur_background"
+
+
+def test_title_overlay_default_false(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    from youcut.config import PipelineConfig
+    config = PipelineConfig()
+    assert config.title_overlay is False
+
+
+def test_title_overlay_can_be_set_true(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    from youcut.config import PipelineConfig
+    config = PipelineConfig(title_overlay=True)
+    assert config.title_overlay is True
+
+
+def test_upload_defaults(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    from youcut.config import PipelineConfig
+    config = PipelineConfig()
+    assert config.upload is False
+    assert config.platforms == ["youtube", "instagram", "tiktok"]
+    assert config.clips is None
+
+
+def test_upload_fields_can_be_overridden(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    from youcut.config import PipelineConfig
+    config = PipelineConfig(upload=True, platforms=["youtube"], clips=[1, 3])
+    assert config.upload is True
+    assert config.platforms == ["youtube"]
+    assert config.clips == [1, 3]
