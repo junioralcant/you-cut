@@ -1,0 +1,964 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="YouCut transforma vídeos longos em clipes curtos com transcrição, seleção inteligente, legendas embutidas e exportação pronta para publicação.">
+  <title>YouCut | Transforme vídeos longos em clipes prontos para publicar</title>
+  <link rel="icon" type="image/png" href="./assets/favicon.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&family=Work+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f0f9ff;
+      --bg-soft: #fff7ed;
+      --surface: rgba(255, 255, 255, 0.86);
+      --surface-strong: #ffffff;
+      --line: rgba(12, 74, 110, 0.12);
+      --text: #082f49;
+      --muted: #4b6b80;
+      --primary: #0ea5e9;
+      --primary-deep: #0369a1;
+      --secondary: #38bdf8;
+      --cta: #f97316;
+      --cta-deep: #ea580c;
+      --shadow: 0 24px 60px rgba(8, 47, 73, 0.12);
+      --radius-xl: 32px;
+      --radius-lg: 24px;
+      --radius-md: 18px;
+      --max: 1180px;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      margin: 0;
+      font-family: "Work Sans", Arial, sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(circle at top left, rgba(56, 189, 248, 0.22), transparent 26%),
+        radial-gradient(circle at top right, rgba(249, 115, 22, 0.18), transparent 24%),
+        linear-gradient(180deg, var(--bg) 0%, #ffffff 52%, var(--bg-soft) 100%);
+      line-height: 1.6;
+    }
+
+    a {
+      color: inherit;
+      text-decoration: none;
+    }
+
+    img {
+      max-width: 100%;
+      display: block;
+    }
+
+    .skip-link {
+      position: absolute;
+      left: 16px;
+      top: -48px;
+      z-index: 100;
+      padding: 12px 16px;
+      border-radius: 12px;
+      background: var(--primary-deep);
+      color: #fff;
+      transition: top 0.2s ease;
+    }
+
+    .skip-link:focus {
+      top: 16px;
+    }
+
+    .container {
+      width: min(var(--max), calc(100% - 32px));
+      margin: 0 auto;
+    }
+
+    .site-header {
+      padding: 18px 0 10px;
+    }
+
+    .nav {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 14px 18px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.7);
+      backdrop-filter: blur(12px);
+      box-shadow: 0 14px 40px rgba(8, 47, 73, 0.06);
+    }
+
+    .brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 12px;
+      min-height: 44px;
+      font-weight: 700;
+    }
+
+    .brand-mark {
+      width: 42px;
+      height: 42px;
+      border-radius: 14px;
+      object-fit: cover;
+      box-shadow: 0 14px 32px rgba(14, 165, 233, 0.22);
+      flex: 0 0 auto;
+    }
+
+    .brand-name {
+      font-family: "Outfit", Arial, sans-serif;
+      font-size: 1.05rem;
+      letter-spacing: 0.02em;
+    }
+
+    .nav-links,
+    .nav-actions {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .nav-links a,
+    .button {
+      min-height: 44px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 999px;
+      transition: transform 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+      cursor: pointer;
+    }
+
+    .nav-links a {
+      padding: 0 14px;
+      color: var(--muted);
+      font-weight: 500;
+    }
+
+    .nav-links a:hover,
+    .nav-links a:focus-visible {
+      background: rgba(14, 165, 233, 0.08);
+      color: var(--primary-deep);
+    }
+
+    .button {
+      padding: 0 18px;
+      font-weight: 700;
+    }
+
+    .button-primary {
+      color: #fff;
+      background: linear-gradient(135deg, var(--primary), var(--cta));
+      box-shadow: 0 16px 34px rgba(14, 165, 233, 0.22);
+    }
+
+    .button-secondary {
+      color: var(--primary-deep);
+      background: rgba(255, 255, 255, 0.9);
+      border: 1px solid var(--line);
+    }
+
+    .button:hover,
+    .button:focus-visible {
+      transform: translateY(-1px);
+    }
+
+    .hero {
+      padding: 32px 0 24px;
+    }
+
+    .hero-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.05fr) minmax(320px, 0.95fr);
+      gap: 24px;
+      align-items: stretch;
+    }
+
+    .hero-copy,
+    .hero-visual,
+    .panel,
+    .feature-card,
+    .step,
+    .cta-panel,
+    .footer-card {
+      border: 1px solid var(--line);
+      background: var(--surface);
+      backdrop-filter: blur(14px);
+      box-shadow: var(--shadow);
+    }
+
+    .hero-copy,
+    .hero-visual {
+      border-radius: var(--radius-xl);
+      overflow: hidden;
+    }
+
+    .hero-copy {
+      position: relative;
+      padding: 34px;
+      background:
+        radial-gradient(circle at top right, rgba(56, 189, 248, 0.14), transparent 28%),
+        linear-gradient(145deg, rgba(255, 255, 255, 0.92), rgba(240, 249, 255, 0.88));
+    }
+
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 40px;
+      padding: 0 14px;
+      border-radius: 999px;
+      background: rgba(14, 165, 233, 0.1);
+      color: var(--primary-deep);
+      font-size: 0.92rem;
+      font-weight: 700;
+    }
+
+    h1,
+    h2,
+    h3 {
+      margin: 0;
+      font-family: "Outfit", Arial, sans-serif;
+      letter-spacing: -0.03em;
+    }
+
+    h1 {
+      margin-top: 18px;
+      font-size: clamp(3.2rem, 7vw, 6rem);
+      line-height: 0.94;
+      max-width: 10ch;
+    }
+
+    .hero-copy p.lead {
+      margin: 18px 0 0;
+      max-width: 56ch;
+      color: var(--muted);
+      font-size: 1.08rem;
+    }
+
+    .hero-actions {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+      margin-top: 24px;
+    }
+
+    .hero-points {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+      margin-top: 28px;
+    }
+
+    .mini-stat {
+      padding: 16px;
+      border-radius: var(--radius-md);
+      background: rgba(255, 255, 255, 0.82);
+      border: 1px solid rgba(12, 74, 110, 0.08);
+    }
+
+    .mini-stat strong {
+      display: block;
+      font-family: "Outfit", Arial, sans-serif;
+      font-size: 1.05rem;
+      margin-bottom: 6px;
+    }
+
+    .mini-stat span {
+      color: var(--muted);
+      font-size: 0.95rem;
+    }
+
+    .hero-visual {
+      padding: 24px;
+      background:
+        linear-gradient(180deg, rgba(8, 47, 73, 0.98), rgba(14, 165, 233, 0.92));
+      color: #e0f2fe;
+      position: relative;
+    }
+
+    .visual-caption {
+      display: inline-flex;
+      padding: 8px 12px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.12);
+      color: #fff7ed;
+      font-size: 0.9rem;
+      font-weight: 700;
+    }
+
+    .video-stage {
+      margin-top: 18px;
+      border-radius: 28px;
+      background:
+        radial-gradient(circle at 20% 10%, rgba(249, 115, 22, 0.25), transparent 30%),
+        linear-gradient(180deg, rgba(2, 6, 23, 0.16), rgba(2, 6, 23, 0.45));
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      padding: 22px;
+      min-height: 100%;
+    }
+
+    .phone {
+      width: min(100%, 320px);
+      margin: 0 auto;
+      border-radius: 34px;
+      padding: 14px;
+      background: linear-gradient(180deg, #082f49, #0f172a);
+      box-shadow: 0 22px 50px rgba(2, 6, 23, 0.45);
+    }
+
+    .phone-screen {
+      aspect-ratio: 9 / 16;
+      border-radius: 24px;
+      overflow: hidden;
+      position: relative;
+      background:
+        linear-gradient(180deg, rgba(8, 47, 73, 0.1), rgba(8, 47, 73, 0.65)),
+        linear-gradient(140deg, #7dd3fc 0%, #0ea5e9 48%, #f97316 100%);
+    }
+
+    .screen-header,
+    .caption-box,
+    .screen-chip-row {
+      position: absolute;
+      left: 16px;
+      right: 16px;
+    }
+
+    .screen-header {
+      top: 16px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 0.82rem;
+      font-weight: 700;
+      color: rgba(255, 255, 255, 0.86);
+    }
+
+    .screen-chip-row {
+      bottom: 126px;
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .screen-chip {
+      padding: 8px 10px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.14);
+      backdrop-filter: blur(10px);
+      font-size: 0.76rem;
+      font-weight: 700;
+      color: #fff;
+    }
+
+    .caption-box {
+      bottom: 16px;
+      padding: 16px;
+      border-radius: 18px;
+      background: rgba(2, 6, 23, 0.56);
+      backdrop-filter: blur(10px);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+    }
+
+    .caption-box strong {
+      display: block;
+      color: #fff;
+      font-family: "Outfit", Arial, sans-serif;
+      font-size: 1rem;
+      margin-bottom: 8px;
+    }
+
+    .caption-box p {
+      margin: 0;
+      color: rgba(255, 255, 255, 0.88);
+      font-size: 0.9rem;
+    }
+
+    .section {
+      padding: 26px 0;
+    }
+
+    .section-heading {
+      display: flex;
+      align-items: end;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 18px;
+      flex-wrap: wrap;
+    }
+
+    .section-heading p {
+      margin: 0;
+      max-width: 58ch;
+      color: var(--muted);
+    }
+
+    .feature-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 16px;
+    }
+
+    .feature-card {
+      border-radius: var(--radius-lg);
+      padding: 22px;
+    }
+
+    .feature-icon {
+      width: 52px;
+      height: 52px;
+      display: inline-grid;
+      place-items: center;
+      border-radius: 16px;
+      margin-bottom: 16px;
+      background: linear-gradient(135deg, rgba(14, 165, 233, 0.14), rgba(249, 115, 22, 0.14));
+      color: var(--primary-deep);
+    }
+
+    .feature-card h3 {
+      font-size: 1.35rem;
+      margin-bottom: 10px;
+    }
+
+    .feature-card p {
+      margin: 0;
+      color: var(--muted);
+    }
+
+    .pipeline {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 16px;
+    }
+
+    .step {
+      border-radius: var(--radius-lg);
+      padding: 22px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .step-number {
+      display: inline-grid;
+      place-items: center;
+      width: 42px;
+      height: 42px;
+      border-radius: 14px;
+      background: linear-gradient(135deg, var(--primary), var(--cta));
+      color: #fff;
+      font-family: "Outfit", Arial, sans-serif;
+      font-size: 1rem;
+      font-weight: 800;
+      margin-bottom: 14px;
+    }
+
+    .step p {
+      margin: 10px 0 0;
+      color: var(--muted);
+    }
+
+    .showcase {
+      display: grid;
+      grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr);
+      gap: 16px;
+    }
+
+    .panel {
+      border-radius: var(--radius-xl);
+      padding: 24px;
+    }
+
+    .terminal {
+      background: linear-gradient(180deg, #082f49, #0f172a);
+      color: #e2e8f0;
+    }
+
+    .terminal-bar {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 18px;
+    }
+
+    .terminal-dot {
+      width: 12px;
+      height: 12px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.3);
+    }
+
+    pre {
+      margin: 0;
+      overflow-x: auto;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 0.94rem;
+      line-height: 1.7;
+      white-space: pre-wrap;
+    }
+
+    .stack-list {
+      display: grid;
+      gap: 12px;
+      margin-top: 18px;
+    }
+
+    .stack-item {
+      padding: 16px 18px;
+      border-radius: 18px;
+      background: rgba(14, 165, 233, 0.08);
+      border: 1px solid rgba(12, 74, 110, 0.08);
+    }
+
+    .stack-item strong {
+      display: block;
+      margin-bottom: 6px;
+      font-family: "Outfit", Arial, sans-serif;
+    }
+
+    .stack-item span {
+      color: var(--muted);
+    }
+
+    .cta-panel {
+      border-radius: var(--radius-xl);
+      padding: 28px;
+      background:
+        radial-gradient(circle at top right, rgba(249, 115, 22, 0.18), transparent 26%),
+        linear-gradient(135deg, rgba(255, 255, 255, 0.95), rgba(240, 249, 255, 0.92));
+    }
+
+    .cta-panel p {
+      margin: 12px 0 0;
+      max-width: 58ch;
+      color: var(--muted);
+    }
+
+    .cta-actions {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+      margin-top: 24px;
+    }
+
+    .footer {
+      padding: 0 0 32px;
+    }
+
+    .footer-card {
+      border-radius: var(--radius-xl);
+      padding: 18px 22px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      flex-wrap: wrap;
+    }
+
+    .footer-links {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .footer-links a {
+      min-height: 44px;
+      display: inline-flex;
+      align-items: center;
+      padding: 0 14px;
+      border-radius: 999px;
+      background: rgba(14, 165, 233, 0.08);
+      color: var(--primary-deep);
+      font-weight: 600;
+    }
+
+    .muted {
+      color: var(--muted);
+    }
+
+    svg {
+      width: 24px;
+      height: 24px;
+    }
+
+    a:focus-visible,
+    button:focus-visible {
+      outline: 3px solid rgba(249, 115, 22, 0.38);
+      outline-offset: 3px;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      html {
+        scroll-behavior: auto;
+      }
+
+      *,
+      *::before,
+      *::after {
+        transition: none !important;
+        animation: none !important;
+      }
+    }
+
+    @media (max-width: 1100px) {
+      .hero-grid,
+      .showcase,
+      .pipeline,
+      .feature-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .showcase {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    @media (max-width: 860px) {
+      .nav {
+        border-radius: 28px;
+      }
+
+      .nav-links {
+        width: 100%;
+      }
+
+      .hero-grid,
+      .feature-grid,
+      .pipeline,
+      .hero-points {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    @media (max-width: 640px) {
+      .container {
+        width: min(var(--max), calc(100% - 20px));
+      }
+
+      .site-header {
+        padding-top: 10px;
+      }
+
+      .nav,
+      .hero-copy,
+      .hero-visual,
+      .panel,
+      .feature-card,
+      .step,
+      .cta-panel,
+      .footer-card {
+        padding-left: 18px;
+        padding-right: 18px;
+      }
+
+      h1 {
+        font-size: clamp(2.6rem, 16vw, 4rem);
+      }
+    }
+  </style>
+</head>
+<body>
+  <a class="skip-link" href="#conteudo">Ir para o conteúdo</a>
+
+  <header class="site-header">
+    <div class="container">
+      <nav class="nav" aria-label="Navegação principal">
+        <a class="brand" href="./index.html" aria-label="YouCut homepage">
+          <img class="brand-mark" src="./assets/youcut-app-icon-brand-180.png" alt="YouCut icon">
+          <span class="brand-name">YouCut</span>
+        </a>
+        <div class="nav-links">
+          <a href="#recursos">Recursos</a>
+          <a href="#pipeline">Como funciona</a>
+          <a href="#workflow">Workflow</a>
+          <a href="./terms-of-service.html">Termos</a>
+        </div>
+        <div class="nav-actions">
+          <a class="button button-secondary" href="mailto:junioralcant111@gmail.com">Contato</a>
+        </div>
+      </nav>
+    </div>
+  </header>
+
+  <main id="conteudo">
+    <section class="hero">
+      <div class="container hero-grid">
+        <div class="hero-copy">
+          <span class="eyebrow">Pipeline para creators e automação de clipes</span>
+          <h1>Transforme vídeos longos em cortes prontos para publicar.</h1>
+          <p class="lead">
+            O YouCut recebe um vídeo longo, transcreve o áudio, identifica os melhores trechos,
+            gera clipes verticais em <strong>1080x1920</strong>, adiciona legendas embutidas
+            e prepara metadados para acelerar sua distribuição.
+          </p>
+          <div class="hero-actions">
+            <a class="button button-primary" href="#recursos">Ver recursos</a>
+            <a class="button button-secondary" href="./terms-of-service.html">Ler Termos de Serviço</a>
+          </div>
+          <div class="hero-points" aria-label="Principais destaques">
+            <div class="mini-stat">
+              <strong>Entrada flexível</strong>
+              <span>YouTube ou arquivo local.</span>
+            </div>
+            <div class="mini-stat">
+              <strong>Legendas embutidas</strong>
+              <span>Estilo por palavra ou por frase.</span>
+            </div>
+            <div class="mini-stat">
+              <strong>Saída pronta</strong>
+              <span>Clipes, títulos e descrições exportados.</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="hero-visual" aria-label="Prévia visual do produto">
+          <span class="visual-caption">Preview do resultado final</span>
+          <div class="video-stage">
+            <div class="phone">
+              <div class="phone-screen">
+                <div class="screen-header">
+                  <span>Clip preview</span>
+                  <span>1080×1920</span>
+                </div>
+                <div class="screen-chip-row">
+                  <span class="screen-chip">Whisper</span>
+                  <span class="screen-chip">AI selection</span>
+                  <span class="screen-chip">Subtitles</span>
+                </div>
+                <div class="caption-box">
+                  <strong>Título sugerido no início do clipe</strong>
+                  <p>Legendas queimadas no vídeo para publicar sem retrabalho manual.</p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="recursos">
+      <div class="container">
+        <div class="section-heading">
+          <div>
+            <h2>O que o YouCut faz</h2>
+          </div>
+          <p>
+            A homepage foca no que interessa para divulgação: entrada, inteligência de recorte,
+            acabamento visual e preparação para publicação.
+          </p>
+        </div>
+        <div class="feature-grid">
+          <article class="feature-card">
+            <div class="feature-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M4 7h16"></path>
+                <path d="M7 4v6"></path>
+                <path d="M17 4v6"></path>
+                <rect x="3" y="6" width="18" height="14" rx="3"></rect>
+                <path d="m10 12 5 3-5 3v-6Z"></path>
+              </svg>
+            </div>
+            <h3>Recebe vídeo de diferentes origens</h3>
+            <p>
+              Trabalha com URL do YouTube ou arquivo local, simplificando o início da pipeline para
+              quem precisa testar, validar e iterar rápido.
+            </p>
+          </article>
+
+          <article class="feature-card">
+            <div class="feature-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M4 5h16v10H4z"></path>
+                <path d="M8 19h8"></path>
+                <path d="M12 15v4"></path>
+                <path d="M7 9h10"></path>
+              </svg>
+            </div>
+            <h3>Transcreve e entende o conteúdo</h3>
+            <p>
+              Usa Whisper para transcrição e uma etapa analítica para detectar trechos com maior potencial
+              de virar cortes curtos e objetivos.
+            </p>
+          </article>
+
+          <article class="feature-card">
+            <div class="feature-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="4" y="4" width="16" height="16" rx="3"></rect>
+                <path d="M8 8h8"></path>
+                <path d="M8 12h8"></path>
+                <path d="M8 16h5"></path>
+              </svg>
+            </div>
+            <h3>Entrega clipes já legendados</h3>
+            <p>
+              Gera vídeos verticais com legendas embutidas e opção de título no início, reduzindo a
+              necessidade de edição manual depois do corte.
+            </p>
+          </article>
+
+          <article class="feature-card">
+            <div class="feature-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 3v18"></path>
+                <path d="M17 8l-5-5-5 5"></path>
+                <path d="M7 16l5 5 5-5"></path>
+              </svg>
+            </div>
+            <h3>Exporta metadados úteis</h3>
+            <p>
+              Além do vídeo, o YouCut prepara título, descrição, hashtags e observações para publicação,
+              agilizando o trabalho operacional do creator.
+            </p>
+          </article>
+
+          <article class="feature-card">
+            <div class="feature-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M4 12h16"></path>
+                <path d="M12 4v16"></path>
+                <circle cx="12" cy="12" r="9"></circle>
+              </svg>
+            </div>
+            <h3>Suporta publicação automatizada</h3>
+            <p>
+              O fluxo pode seguir até a etapa de upload, com integração planejada para plataformas como
+              YouTube, Instagram e TikTok.
+            </p>
+          </article>
+
+          <article class="feature-card">
+            <div class="feature-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M5 12h14"></path>
+                <path d="M12 5l7 7-7 7"></path>
+              </svg>
+            </div>
+            <h3>Feito para velocidade operacional</h3>
+            <p>
+              A proposta do produto é tirar etapas manuais do caminho e transformar uma fonte longa de conteúdo
+              em vários ativos curtos com menos atrito.
+            </p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="pipeline">
+      <div class="container">
+        <div class="section-heading">
+          <div>
+            <h2>Como funciona</h2>
+          </div>
+          <p>
+            A pipeline foi desenhada para sair de uma única fonte de vídeo e chegar em múltiplos clipes curtos
+            com apresentação final pronta.
+          </p>
+        </div>
+        <div class="pipeline">
+          <article class="step">
+            <span class="step-number">01</span>
+            <h3>Entrada</h3>
+            <p>Recebe um vídeo do YouTube ou um arquivo já salvo localmente.</p>
+          </article>
+          <article class="step">
+            <span class="step-number">02</span>
+            <h3>Transcrição e seleção</h3>
+            <p>Converte fala em texto e identifica os melhores momentos do material.</p>
+          </article>
+          <article class="step">
+            <span class="step-number">03</span>
+            <h3>Corte e acabamento</h3>
+            <p>Gera clipes verticais, adiciona legendas e pode queimar o título nos primeiros segundos.</p>
+          </article>
+          <article class="step">
+            <span class="step-number">04</span>
+            <h3>Exportação</h3>
+            <p>Entrega vídeo final e metadados prontos para acelerar publicação e distribuição.</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="workflow">
+      <div class="container showcase">
+        <article class="panel terminal">
+          <div class="terminal-bar" aria-hidden="true">
+            <span class="terminal-dot"></span>
+            <span class="terminal-dot"></span>
+            <span class="terminal-dot"></span>
+          </div>
+          <h2>Workflow simples no terminal</h2>
+          <pre><code>youcut run "https://www.youtube.com/watch?v=exemplo"
+
+youcut run "./meu-video.mp4" --clips 3
+
+youcut run "./meu-video.mp4" --title-overlay
+
+youcut run "./meu-video.mp4" --upload --platforms all</code></pre>
+        </article>
+
+        <article class="panel">
+          <h2>O que sai no final</h2>
+          <div class="stack-list">
+            <div class="stack-item">
+              <strong>Clipes verticais</strong>
+              <span>Arquivos em formato pronto para Shorts, Reels e TikTok.</span>
+            </div>
+            <div class="stack-item">
+              <strong>Legendas embutidas</strong>
+              <span>Renderização final no vídeo para reduzir dependência de edição externa.</span>
+            </div>
+            <div class="stack-item">
+              <strong>Arquivos de apoio</strong>
+              <span>Títulos, descrições, hashtags, ideia de thumbnail e justificativa de seleção.</span>
+            </div>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="container">
+        <article class="cta-panel">
+          <h2>Uma base sólida para divulgar e evoluir a ferramenta</h2>
+          <p>
+            Esta homepage foi montada para GitHub Pages como landing institucional do projeto.
+            Ela já apresenta o produto, comunica os principais diferenciais e oferece acesso ao documento legal público.
+          </p>
+          <div class="cta-actions">
+            <a class="button button-primary" href="mailto:junioralcant111@gmail.com">Falar sobre o YouCut</a>
+            <a class="button button-secondary" href="./terms-of-service.html">Abrir Termos de Serviço</a>
+          </div>
+        </article>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <div class="container">
+      <div class="footer-card">
+        <div>
+          <strong>YouCut</strong>
+          <div class="muted">Transformação de vídeos longos em clipes curtos com pipeline automatizada.</div>
+        </div>
+        <div class="footer-links">
+          <a href="./index.html">Home</a>
+          <a href="./terms-of-service.html">Terms of Service</a>
+          <a href="mailto:junioralcant111@gmail.com">Contato</a>
+        </div>
+      </div>
+    </div>
+  </footer>
+</body>
+</html>
