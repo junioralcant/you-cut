@@ -174,8 +174,43 @@ Autentique cada plataforma antes do primeiro upload, ou deixe o fluxo pedir logi
 ```bash
 youcut auth login --platform youtube
 youcut auth revoke --platform instagram
+youcut auth login --platform tiktok
 youcut auth status
 ```
+
+#### TikTok
+
+Para autenticar no TikTok, configure primeiro a variável abaixo no `.env`:
+
+```env
+TIKTOK_CLIENT_KEY=seu_client_key
+TIKTOK_CLIENT_SECRET=seu_client_secret
+```
+
+Depois execute:
+
+```bash
+youcut auth login --platform tiktok
+```
+
+O fluxo do TikTok funciona via OAuth PKCE:
+
+1. crie um app no portal de developers do TikTok e obtenha o `client_key`;
+2. configure `TIKTOK_CLIENT_KEY` e `TIKTOK_CLIENT_SECRET` no `.env`;
+3. rode `youcut auth login --platform tiktok`;
+4. o navegador será aberto para o login e autorização do app;
+5. ao concluir, o token será salvo em `~/.youcut/credentials/tiktok.json`.
+
+Comandos úteis:
+
+```bash
+youcut auth revoke --platform tiktok
+youcut auth status
+```
+
+Observação importante:
+
+- apps do TikTok não auditados publicam vídeos como `private`; para postagem pública é necessário que o app passe pela auditoria do TikTok.
 
 ## Saída gerada
 
