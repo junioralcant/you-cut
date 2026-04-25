@@ -12,6 +12,7 @@ _STATUS_SYMBOLS = {
     "success": "✓",
     "failed": "✗",
     "skipped": "–",
+    "pending": "⏳",
 }
 
 

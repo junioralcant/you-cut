@@ -16,7 +16,7 @@ class ClipMetadata(BaseModel):
 class UploadResult(BaseModel):
     platform: str
     clip_index: int
-    status: Literal["success", "skipped", "failed"]
+    status: Literal["success", "skipped", "failed", "pending"]
     url: str | None = None
     error: str | None = None
 

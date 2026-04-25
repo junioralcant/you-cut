@@ -1,5 +1,6 @@
 """Tests for TikTokUploader using httpx.MockTransport."""
 import math
+import re
 from pathlib import Path
 from unittest.mock import patch
 
@@ -249,8 +250,8 @@ class TestPollingRateLimit:
         with patch("youcut.uploader.tiktok.time.sleep"):
             result = uploader.upload(video_file, metadata, clip_index=9)
 
-        assert result.status == "failed"
-        assert "timed out" in result.error.lower() or "timeout" in result.error.lower()
+        assert result.status == "pending"
+        assert "inbox" in result.error.lower() or "processing" in result.error.lower()
 
     def test_no_sleep_on_first_poll_attempt(self, token_dir, video_file, metadata):
         """First polling attempt must not sleep (no wasted time before first check)."""
@@ -266,6 +267,33 @@ class TestPollingRateLimit:
 
 
 class TestChunkSizeLimit:
+    def test_small_file_sends_file_size_as_chunk_size(self, tmp_path, token_dir, metadata):
+        """chunk_size in init must equal file_size when file fits in a single chunk."""
+        video_path = tmp_path / "small_clip.mp4"
+        video_path.write_bytes(b"x" * 1024)  # 1 KB
+
+        received_init_body: dict = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            url = str(request.url)
+            if "init" in url:
+                received_init_body.update(request.read() and __import__("json").loads(request.content))
+                return httpx.Response(200, json={"data": {"publish_id": _PUBLISH_ID, "upload_url": "https://fake.upload/"}, "error": {"code": "ok", "message": ""}})
+            if "fake.upload" in url:
+                return httpx.Response(200, json={"data": {}})
+            if "status" in url:
+                return httpx.Response(200, json={"data": {"status": "PUBLISH_COMPLETE", "publicaly_available_post_id": [_VIDEO_ID]}, "error": {"code": "ok", "message": ""}})
+            return httpx.Response(404, text="not found")
+
+        transport = httpx.MockTransport(handler)
+        uploader = _make_uploader(token_dir, transport, polling_interval=0.0)
+        uploader.upload(video_path, metadata, clip_index=99)
+
+        source_info = received_init_body.get("source_info", {})
+        assert source_info["chunk_size"] == 1024
+        assert source_info["video_size"] == 1024
+        assert source_info["total_chunk_count"] == 1
+
     def test_large_file_is_split_into_chunks_of_at_most_64mb(self, tmp_path, token_dir, metadata):
         """Verify that a file larger than 64 MB is split into ≤64 MB chunks."""
         chunk_size = _CHUNK_SIZE
@@ -334,8 +362,8 @@ class TestPrivateVideoWarning:
             uploader.upload(video_file, metadata, clip_index=12)
 
         warning_messages = [r.message for r in caplog.records if r.levelno == logging.WARNING]
-        assert any("private" in msg.lower() for msg in warning_messages), (
-            "Expected a warning about private videos, got: " + str(warning_messages)
+        assert any("draft" in msg.lower() or "inbox" in msg.lower() for msg in warning_messages), (
+            "Expected a warning about draft/inbox, got: " + str(warning_messages)
         )
 
     def test_warning_logged_even_on_failed_upload(self, token_dir, video_file, metadata, caplog):
@@ -349,7 +377,7 @@ class TestPrivateVideoWarning:
             uploader.upload(video_file, metadata, clip_index=13)
 
         warning_messages = [r.message for r in caplog.records if r.levelno == logging.WARNING]
-        assert any("private" in msg.lower() for msg in warning_messages)
+        assert any("draft" in msg.lower() or "inbox" in msg.lower() for msg in warning_messages)
 
 
 class TestAuthenticate:
@@ -464,10 +492,112 @@ class TestAuthenticate:
         with patch.object(
             uploader,
             "_run_pkce_oauth_flow",
-            side_effect=RuntimeError("TikTok OAuth requires TIKTOK_CLIENT_KEY"),
+            side_effect=RuntimeError(
+                "TikTok OAuth requires TIKTOK_CLIENT_KEY and TIKTOK_CLIENT_SECRET"
+            ),
         ):
-            with pytest.raises(RuntimeError, match="TIKTOK_CLIENT_KEY"):
+            with pytest.raises(RuntimeError, match="TIKTOK_CLIENT_SECRET"):
                 uploader.authenticate()
+
+
+class TestTokenParsing:
+    def test_accepts_double_nested_data_payload(self, token_dir):
+        uploader = TikTokUploader(token_dir=token_dir)
+        response = httpx.Response(
+            200,
+            json={
+                "data": {
+                    "data": {
+                        "access_token": "oauth_tok",
+                        "refresh_token": "refresh_tok",
+                        "expires_in": 3600,
+                    }
+                }
+            },
+        )
+
+        parsed = uploader._parse_token_response(response, "TikTok OAuth token exchange failed")
+
+        assert parsed["access_token"] == "oauth_tok"
+        assert parsed["refresh_token"] == "refresh_tok"
+        assert "expires_at" in parsed
+
+    def test_surfaces_api_error_when_access_token_is_missing(self, token_dir):
+        uploader = TikTokUploader(token_dir=token_dir)
+        response = httpx.Response(
+            200,
+            json={
+                "error": {
+                    "code": "invalid_client",
+                    "message": "Client key is not approved for this scope.",
+                }
+            },
+        )
+
+        with pytest.raises(RuntimeError, match="invalid_client: Client key is not approved for this scope."):
+            uploader._parse_token_response(response, "TikTok OAuth token exchange failed")
+
+
+class TestTokenRequests:
+    def test_exchange_code_for_token_sends_client_secret(self, token_dir, monkeypatch):
+        seen = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen["body"] = request.content.decode()
+            return httpx.Response(200, json={"access_token": "oauth_tok", "expires_in": 3600})
+
+        uploader = TikTokUploader(token_dir=token_dir, transport=httpx.MockTransport(handler))
+
+        uploader._exchange_code_for_token(
+            client_key="client_key_123",
+            client_secret="client_secret_456",
+            redirect_uri="http://127.0.0.1:8765/callback",
+            code="auth_code_123",
+            code_verifier="verifier_123",
+        )
+
+        assert "client_key=client_key_123" in seen["body"]
+        assert "client_secret=client_secret_456" in seen["body"]
+        assert "grant_type=authorization_code" in seen["body"]
+
+    def test_refresh_access_token_sends_client_secret(self, token_dir, monkeypatch):
+        seen = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen["body"] = request.content.decode()
+            return httpx.Response(200, json={"access_token": "fresh_tok", "expires_in": 3600})
+
+        monkeypatch.setenv("TIKTOK_CLIENT_SECRET", "client_secret_456")
+        uploader = TikTokUploader(token_dir=token_dir, transport=httpx.MockTransport(handler))
+
+        refreshed = uploader._refresh_access_token(
+            {
+                "client_key": "client_key_123",
+                "refresh_token": "refresh_tok_123",
+            }
+        )
+
+        assert refreshed["access_token"] == "fresh_tok"
+        assert "client_key=client_key_123" in seen["body"]
+        assert "client_secret=client_secret_456" in seen["body"]
+        assert "grant_type=refresh_token" in seen["body"]
+
+
+class TestPkceHelpers:
+    def test_code_verifier_matches_tiktok_sdk_constraints(self, token_dir):
+        uploader = TikTokUploader(token_dir=token_dir)
+
+        verifier = uploader._build_code_verifier()
+
+        assert len(verifier) == 43
+        assert re.fullmatch(r"[A-Za-z0-9._-]{43}", verifier)
+
+    def test_code_challenge_uses_sha256_hex_digest(self, token_dir):
+        uploader = TikTokUploader(token_dir=token_dir)
+
+        challenge = uploader._build_code_challenge("abcABC123-._xyz")
+
+        assert challenge == "a182fa409909d6c15763daf57df4bc9585c560e0810135111b7925744c1876fc"
 
 
 class TestPollingPublishFailed:

@@ -1,10 +1,8 @@
-import base64
 import hashlib
 import logging
 import math
 import os
 import secrets
-import socket
 import time
 import webbrowser
 from datetime import UTC, datetime, timedelta
@@ -27,9 +25,11 @@ _AUTH_URL = "https://www.tiktok.com/v2/auth/authorize/"
 _TOKEN_URL = f"{_API_BASE}/v2/oauth/token/"
 _CHUNK_SIZE = 64 * 1024 * 1024  # 64 MB max per chunk per TikTok spec
 _POLLING_INTERVAL = 10.0  # 6 req/min → 1 req every 10 s
-_POLLING_MAX_RETRIES = 30  # ~5 minutes total
+_POLLING_MAX_RETRIES = 60  # ~10 minutes total
 _AUTH_TIMEOUT = 300.0
 _ACCESS_TOKEN_SKEW = timedelta(seconds=30)
+_PKCE_VERIFIER_LENGTH = 43
+_PKCE_VERIFIER_CHARSET = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._"
 
 
 def _utcnow() -> datetime:
@@ -113,20 +113,21 @@ class TikTokUploader(Uploader):
         self._access_token = token["access_token"]
 
     def _build_code_verifier(self) -> str:
-        return secrets.token_urlsafe(64)
+        return "".join(secrets.choice(_PKCE_VERIFIER_CHARSET) for _ in range(_PKCE_VERIFIER_LENGTH))
 
     def _build_code_challenge(self, code_verifier: str) -> str:
-        digest = hashlib.sha256(code_verifier.encode("ascii")).digest()
-        return base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
+        return hashlib.sha256(code_verifier.encode("ascii")).hexdigest()
 
-    def _find_free_port(self) -> int:
-        with socket.socket() as sock:
-            sock.bind(("127.0.0.1", 0))
-            return int(sock.getsockname()[1])
+    _CALLBACK_PORT = 8765
 
     def _start_callback_server(self) -> tuple[_OAuthHTTPServer, str]:
-        port = self._find_free_port()
-        redirect_uri = f"http://127.0.0.1:{port}/callback"
+        override = os.getenv("TIKTOK_REDIRECT_URI")
+        if override:
+            redirect_uri = override
+            port = int(urlparse(override).port or self._CALLBACK_PORT)
+        else:
+            port = self._CALLBACK_PORT
+            redirect_uri = f"http://127.0.0.1:{port}/callback"
         server = _OAuthHTTPServer(("127.0.0.1", port))
         return server, redirect_uri
 
@@ -158,7 +159,7 @@ class TikTokUploader(Uploader):
         query = urlencode(
             {
                 "client_key": client_key,
-                "scope": "video.publish",
+                "scope": "user.info.basic,video.upload",
                 "response_type": "code",
                 "redirect_uri": redirect_uri,
                 "state": state,
@@ -172,6 +173,7 @@ class TikTokUploader(Uploader):
         self,
         *,
         client_key: str,
+        client_secret: str,
         redirect_uri: str,
         code: str,
         code_verifier: str,
@@ -182,6 +184,7 @@ class TikTokUploader(Uploader):
                 headers={"Content-Type": "application/x-www-form-urlencoded"},
                 data={
                     "client_key": client_key,
+                    "client_secret": client_secret,
                     "grant_type": "authorization_code",
                     "code": code,
                     "redirect_uri": redirect_uri,
@@ -193,7 +196,8 @@ class TikTokUploader(Uploader):
     def _refresh_access_token(self, token: dict) -> dict:
         refresh_token = token.get("refresh_token")
         client_key = token.get("client_key") or os.getenv("TIKTOK_CLIENT_KEY")
-        if not refresh_token or not client_key:
+        client_secret = os.getenv("TIKTOK_CLIENT_SECRET")
+        if not refresh_token or not client_key or not client_secret:
             raise RuntimeError("Saved TikTok credentials cannot be refreshed.")
 
         with self._make_client() as client:
@@ -202,6 +206,7 @@ class TikTokUploader(Uploader):
                 headers={"Content-Type": "application/x-www-form-urlencoded"},
                 data={
                     "client_key": client_key,
+                    "client_secret": client_secret,
                     "grant_type": "refresh_token",
                     "refresh_token": refresh_token,
                 },
@@ -221,10 +226,30 @@ class TikTokUploader(Uploader):
             raise RuntimeError(f"{context}: HTTP {response.status_code}: {response.text}")
 
         payload = response.json()
-        data = payload.get("data", payload)
+        if not isinstance(payload, dict):
+            raise RuntimeError(f"{context}: unexpected response body: {payload!r}")
+
+        data = payload
+        # TikTok token responses may wrap the token payload under one or more `data` keys.
+        while isinstance(data, dict) and isinstance(data.get("data"), dict):
+            data = data["data"]
+
         access_token = data.get("access_token")
         if not access_token:
-            raise RuntimeError(f"{context}: response missing access_token")
+            error = payload.get("error")
+            if isinstance(error, dict):
+                code = error.get("code")
+                message = error.get("message")
+                if code or message:
+                    raise RuntimeError(
+                        f"{context}: {code or 'unknown_error'}: {message or 'missing error message'}"
+                    )
+
+            message = payload.get("message")
+            if message:
+                raise RuntimeError(f"{context}: {message}")
+
+            raise RuntimeError(f"{context}: response missing access_token: {payload}")
 
         normalized = dict(data)
         normalized["access_token"] = access_token
@@ -246,9 +271,10 @@ class TikTokUploader(Uploader):
 
     def _run_pkce_oauth_flow(self) -> dict:
         client_key = os.getenv("TIKTOK_CLIENT_KEY")
-        if not client_key:
+        client_secret = os.getenv("TIKTOK_CLIENT_SECRET")
+        if not client_key or not client_secret:
             raise RuntimeError(
-                "TikTok OAuth requires TIKTOK_CLIENT_KEY to be configured before login."
+                "TikTok OAuth requires TIKTOK_CLIENT_KEY and TIKTOK_CLIENT_SECRET to be configured before login."
             )
 
         code_verifier = self._build_code_verifier()
@@ -280,6 +306,7 @@ class TikTokUploader(Uploader):
 
         token = self._exchange_code_for_token(
             client_key=client_key,
+            client_secret=client_secret,
             redirect_uri=redirect_uri,
             code=code,
             code_verifier=code_verifier,
@@ -317,11 +344,12 @@ class TikTokUploader(Uploader):
         """Initialize TikTok post. Returns (publish_id, upload_url, error_msg)."""
         file_size = video_path.stat().st_size
         total_chunk_count = max(1, math.ceil(file_size / _CHUNK_SIZE))
+        chunk_size = file_size if total_chunk_count == 1 else _CHUNK_SIZE
 
         with self._make_client() as client:
             try:
                 resp = client.post(
-                    f"{_API_BASE}/v2/post/publish/video/init/",
+                    f"{_API_BASE}/v2/post/publish/inbox/video/init/",
                     headers={
                         "Authorization": f"Bearer {self._access_token}",
                         "Content-Type": "application/json; charset=UTF-8",
@@ -329,12 +357,15 @@ class TikTokUploader(Uploader):
                     json={
                         "post_info": {
                             "title": caption,
-                            "privacy_level": "PUBLIC_TO_EVERYONE",
+                            "privacy_level": "SELF_ONLY",
+                            "disable_duet": False,
+                            "disable_comment": False,
+                            "disable_stitch": False,
                         },
                         "source_info": {
                             "source": "FILE_UPLOAD",
                             "video_size": file_size,
-                            "chunk_size": _CHUNK_SIZE,
+                            "chunk_size": chunk_size,
                             "total_chunk_count": total_chunk_count,
                         },
                     },
@@ -441,9 +472,9 @@ class TikTokUploader(Uploader):
                 return "FAILED", None, f"TikTok publish failed: {fail_reason}"
 
         return (
-            "FAILED",
+            "PENDING",
             None,
-            f"Status polling timed out after {self._polling_max_retries} attempts",
+            f"TikTok is still processing after {self._polling_max_retries} attempts (~{self._polling_max_retries * self._polling_interval / 60:.0f} min). Check your TikTok inbox — the draft should be there.",
         )
 
     def upload(
@@ -455,10 +486,10 @@ class TikTokUploader(Uploader):
         if self._access_token is None:
             self.authenticate()
 
-        # Non-audited TikTok apps always publish videos as private.
+        # Non-audited apps use video.upload scope — videos land in the creator's inbox as drafts.
         logger.warning(
-            "TikTok: videos uploaded by non-audited apps are published as private. "
-            "Submit your app for TikTok audit to enable public posting."
+            "TikTok: videos are sent to the creator's inbox as drafts (app not yet audited). "
+            "Open TikTok, go to your inbox, and publish the draft to make it public."
         )
 
         meta = apply_platform_limits(metadata, _PLATFORM)
@@ -478,6 +509,11 @@ class TikTokUploader(Uploader):
             )
 
         status, url, error = self._poll_status(publish_id)
+        if status == "PENDING":
+            logger.warning("TikTok publish_id=%s: %s", publish_id, error)
+            return UploadResult(
+                platform=_PLATFORM, clip_index=clip_index, status="pending", error=error
+            )
         if status != "PUBLISH_COMPLETE":
             logger.error(
                 "TikTok publish failed for publish_id=%s: %s", publish_id, error
