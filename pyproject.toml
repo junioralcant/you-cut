@@ -19,6 +19,7 @@ dependencies = [
     "google-api-python-client>=2.100.0",
     "google-auth-oauthlib>=1.2.0",
     "httpx>=0.25.0",
+    "questionary>=2.0.0",
 ]
 
 [project.optional-dependencies]

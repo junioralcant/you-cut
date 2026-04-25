@@ -95,15 +95,15 @@ class TestUploadClipsIntegration:
 
         monkeypatch.setattr(
             "youcut.uploader.YouTubeUploader",
-            lambda token_dir: FakeUploader(token_dir, "youtube"),
+            lambda token_dir, **kw: FakeUploader(token_dir, "youtube"),
         )
         monkeypatch.setattr(
             "youcut.uploader.InstagramUploader",
-            lambda token_dir: FakeUploader(token_dir, "instagram"),
+            lambda token_dir, **kw: FakeUploader(token_dir, "instagram"),
         )
         monkeypatch.setattr(
             "youcut.uploader.TikTokUploader",
-            lambda token_dir: FakeUploader(token_dir, "tiktok"),
+            lambda token_dir, **kw: FakeUploader(token_dir, "tiktok"),
         )
 
         results = upload_clips(
@@ -156,15 +156,15 @@ class TestUploadClipsIntegration:
 
         monkeypatch.setattr(
             "youcut.uploader.YouTubeUploader",
-            lambda token_dir: FakeUploader(token_dir, "youtube"),
+            lambda token_dir, **kw: FakeUploader(token_dir, "youtube"),
         )
         monkeypatch.setattr(
             "youcut.uploader.InstagramUploader",
-            lambda token_dir: FakeUploader(token_dir, "instagram"),
+            lambda token_dir, **kw: FakeUploader(token_dir, "instagram"),
         )
         monkeypatch.setattr(
             "youcut.uploader.TikTokUploader",
-            lambda token_dir: FakeUploader(token_dir, "tiktok"),
+            lambda token_dir, **kw: FakeUploader(token_dir, "tiktok"),
         )
 
         results = upload_clips(

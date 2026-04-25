@@ -18,6 +18,7 @@ from youcut.config import PipelineConfig
 from youcut.downloader import VideoDownloadError, download_video
 from youcut.exporter import export_metadata
 from youcut.preview import generate_clip_preview
+from youcut.selector import prompt_clip_selection
 from youcut.title_overlay import add_title_overlay
 from youcut.transcriber import transcribe
 from youcut.uploader import upload_clips
@@ -25,6 +26,8 @@ from youcut.uploader.auth import get_token, revoke_token
 from youcut.uploader.instagram import InstagramUploader
 from youcut.uploader.tiktok import TikTokUploader
 from youcut.uploader.youtube import YouTubeUploader
+
+logger = logging.getLogger(__name__)
 
 app = typer.Typer(name="youcut", help="Gerador automático de clipes virais a partir de vídeos longos")
 app_auth = typer.Typer(help="Gerencia autenticação das plataformas de upload")
@@ -390,22 +393,26 @@ def run(
             progress.advance(task_exp)
         progress.update(task_exp, description="[green]Metadados exportados[/green]")
 
-        if config.upload:
-            task_upload = progress.add_task("Enviando clipes...", total=None)
-            try:
-                upload_clips(
-                    clips=list(zip(clip_paths, metadata_paths)),
-                    platforms=config.platforms,
-                    token_dir=_default_token_dir(),
-                    clips_filter=config.clips,
-                )
-            except Exception as e:
-                progress.stop()
-                _err_console.print(
-                    Panel(str(e), title="[red]Erro de Upload[/red]", border_style="red")
-                )
-                raise typer.Exit(code=1)
-            progress.update(task_upload, description="[green]Uploads concluídos[/green]", completed=1, total=1)
+    if upload and upload_clips_raw and upload_clips_raw.strip().lower() not in ("", "all"):
+        logger.warning(
+            "O valor de --clips (%s) é ignorado quando o seletor interativo está ativo.", upload_clips_raw
+        )
+
+    clips_filter = prompt_clip_selection(viral_clips, clip_paths) if config.upload else None
+
+    if config.upload:
+        try:
+            upload_clips(
+                clips=list(zip(clip_paths, metadata_paths)),
+                platforms=config.platforms,
+                token_dir=_default_token_dir(),
+                clips_filter=clips_filter,
+            )
+        except Exception as e:
+            _err_console.print(
+                Panel(str(e), title="[red]Erro de Upload[/red]", border_style="red")
+            )
+            raise typer.Exit(code=1)
 
     _show_clips_table(viral_clips, clip_paths=clip_paths, preview_paths=preview_paths)
 

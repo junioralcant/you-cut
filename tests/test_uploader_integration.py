@@ -29,8 +29,11 @@ def _write_clip(tmp_path: Path, index: int) -> tuple[Path, Path]:
 
 
 class _RespxYouTubeUploader:
-    def __init__(self, token_dir: Path) -> None:
+    def __init__(self, token_dir: Path, **kwargs) -> None:
         self.token_dir = token_dir
+
+    def authenticate(self) -> None:
+        pass
 
     def upload(self, video_path: Path, metadata, clip_index: int = 0) -> UploadResult:
         response = httpx.post(
@@ -48,8 +51,11 @@ class _RespxYouTubeUploader:
 
 
 class _RespxInstagramUploader:
-    def __init__(self, token_dir: Path) -> None:
+    def __init__(self, token_dir: Path, **kwargs) -> None:
         self.token_dir = token_dir
+
+    def authenticate(self) -> None:
+        pass
 
     def upload(self, video_path: Path, metadata, clip_index: int = 0) -> UploadResult:
         response = httpx.post(

@@ -79,6 +79,7 @@ def _mock_pipeline(
     mock_preview = MagicMock(return_value=MagicMock(path=Path("clip_01_preview.jpg")))
     mock_title_overlay = MagicMock(return_value=video_path)
     mock_upload = MagicMock(return_value=[])
+    mock_prompt_clip_selection = MagicMock(return_value=None)
 
     return {
         "download": mock_download,
@@ -90,6 +91,7 @@ def _mock_pipeline(
         "generate_clip_preview": mock_preview,
         "add_title_overlay": mock_title_overlay,
         "upload_clips": mock_upload,
+        "prompt_clip_selection": mock_prompt_clip_selection,
     }
 
 
@@ -106,6 +108,7 @@ def _run_with_mocks(mocks: dict, extra_args: list[str] | None = None) -> "Result
         patch("youcut.cli.generate_clip_preview", mocks["generate_clip_preview"]),
         patch("youcut.cli.add_title_overlay", mocks["add_title_overlay"]),
         patch("youcut.cli.upload_clips", mocks["upload_clips"]),
+        patch("youcut.cli.prompt_clip_selection", mocks["prompt_clip_selection"]),
     ):
         return runner.invoke(app, args, env=API_ENV)
 
@@ -523,12 +526,13 @@ class TestUploadIntegration:
         assert kwargs["platforms"] == ["youtube", "instagram", "tiktok"]
         assert kwargs["clips_filter"] is None
 
-    def test_run_with_upload_and_specific_clips_passes_sorted_deduplicated_filter(self):
+    def test_run_with_upload_passes_prompt_result_as_clips_filter(self):
         clips = [_make_clip("A"), _make_clip("B"), _make_clip("C")]
         mocks = _mock_pipeline(clips=clips)
+        mocks["prompt_clip_selection"].return_value = [1, 3]
         result = _run_with_mocks(
             mocks,
-            extra_args=["--upload", "--platforms", "youtube", "--clips", "3,1,3"],
+            extra_args=["--upload", "--platforms", "youtube"],
         )
 
         assert result.exit_code == 0
@@ -570,6 +574,59 @@ class TestUploadIntegration:
         assert result.exit_code != 0
         assert "comportamento legado" in result.output.lower() or "--upload" in result.output.lower()
         mocks["download"].assert_not_called()
+
+    def test_run_with_upload_ignores_manual_clips_flag(self):
+        clips = [_make_clip("A"), _make_clip("B"), _make_clip("C")]
+        mocks = _mock_pipeline(clips=clips)
+        mocks["prompt_clip_selection"].return_value = None
+        result = _run_with_mocks(
+            mocks,
+            extra_args=["--upload", "--platforms", "youtube", "--clips", "1,3"],
+        )
+
+        assert result.exit_code == 0
+        kwargs = mocks["upload_clips"].call_args.kwargs
+        assert kwargs["clips_filter"] is None
+
+
+# ---------------------------------------------------------------------------
+# 8.11.1 — prompt_clip_selection integration
+# ---------------------------------------------------------------------------
+
+class TestPromptClipSelection:
+    def test_prompt_clip_selection_called_when_upload_flag_active(self):
+        mocks = _mock_pipeline()
+        result = _run_with_mocks(mocks, extra_args=["--upload", "--platforms", "youtube"])
+
+        assert result.exit_code == 0
+        mocks["prompt_clip_selection"].assert_called_once()
+
+    def test_upload_clips_receives_correct_clips_filter(self):
+        clips = [_make_clip("A"), _make_clip("B"), _make_clip("C")]
+        mocks = _mock_pipeline(clips=clips)
+        mocks["prompt_clip_selection"].return_value = [1, 3]
+        result = _run_with_mocks(mocks, extra_args=["--upload", "--platforms", "youtube"])
+
+        assert result.exit_code == 0
+        kwargs = mocks["upload_clips"].call_args.kwargs
+        assert kwargs["clips_filter"] == [1, 3]
+
+    def test_prompt_clip_selection_not_called_without_upload_flag(self):
+        mocks = _mock_pipeline()
+        result = _run_with_mocks(mocks)
+
+        assert result.exit_code == 0
+        mocks["prompt_clip_selection"].assert_not_called()
+
+    def test_none_selection_passes_none_as_clips_filter(self):
+        clips = [_make_clip("A"), _make_clip("B")]
+        mocks = _mock_pipeline(clips=clips)
+        mocks["prompt_clip_selection"].return_value = None
+        result = _run_with_mocks(mocks, extra_args=["--upload", "--platforms", "youtube"])
+
+        assert result.exit_code == 0
+        kwargs = mocks["upload_clips"].call_args.kwargs
+        assert kwargs["clips_filter"] is None
 
 
 # ---------------------------------------------------------------------------

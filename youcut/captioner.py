@@ -145,19 +145,19 @@ def add_captions(
     ) as tmp:
         tmp_path = Path(tmp.name)
 
+    # Copy ASS to a temp file with a safe name so FFmpeg filter parsing isn't
+    # confused by commas, quotes, or other special chars in the original path.
+    with tempfile.NamedTemporaryFile(
+        suffix=".ass", delete=False, dir=tempfile.gettempdir()
+    ) as safe_ass_tmp:
+        safe_ass_path = Path(safe_ass_tmp.name)
+
     try:
-        # `ass` expects filename=... for absolute paths; escape characters parsed by FFmpeg.
-        escaped_ass = (
-            str(ass_file)
-            .replace("\\", "\\\\")
-            .replace(":", "\\:")
-            .replace("'", r"\'")
-            .replace(" ", "\\ ")
-        )
+        safe_ass_path.write_bytes(ass_file.read_bytes())
         cmd = [
             "ffmpeg",
             "-i", str(clip_path),
-            "-vf", f"ass=filename={escaped_ass}",
+            "-vf", f"ass={safe_ass_path}",
             "-c:v", "libx264",
             "-c:a", "aac",
             "-y",
@@ -175,5 +175,6 @@ def add_captions(
         raise
     finally:
         ass_file.unlink(missing_ok=True)
+        safe_ass_path.unlink(missing_ok=True)
 
     return clip_path

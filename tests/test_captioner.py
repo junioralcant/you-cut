@@ -309,15 +309,20 @@ class TestAddCaptions:
         assert len(mp4_files) == 1
         assert mp4_files[0] == clip_path
 
-    def test_ffmpeg_ass_path_has_spaces_escaped(self, tmp_path, config_word, transcription, clip):
-        spaced_dir = tmp_path / "my output"
+    def test_ffmpeg_ass_uses_safe_temp_path(self, tmp_path, config_word, transcription, clip):
+        # Original clip sits in a directory with spaces and special chars; FFmpeg
+        # must receive a safe temp path (no special chars) to avoid filter-parse errors.
+        spaced_dir = tmp_path / 'my output, "special"'
         spaced_dir.mkdir()
         clip_path = spaced_dir / "clip_01.mp4"
         clip_path.touch()
         _, cmd = self._run_add_captions(clip_path, transcription, clip, config_word)
         vf_idx = cmd.index("-vf")
         vf_value = cmd[vf_idx + 1]
-        assert "my\\ output" in vf_value
+        assert vf_value.startswith("ass=")
+        # Safe temp path must not contain the original problematic directory name
+        assert "my output" not in vf_value
+        assert ',"special"' not in vf_value
 
     def test_word_style_generates_event_per_word(self, tmp_path, config_word, transcription, clip):
         clip_path = tmp_path / "clip_01.mp4"
