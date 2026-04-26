@@ -21,6 +21,8 @@ _RETRY_STATUS_CODES = frozenset({500, 502, 503, 504})
 _MAX_RETRIES = 3
 _RETRY_DELAY = 2.0
 _CHUNKSIZE = 256 * 1024  # 256 KB — minimum resumable chunk
+_ALLOWED_THUMBNAIL_SUFFIXES = frozenset({".png", ".jpg", ".jpeg"})
+_MAX_THUMBNAIL_BYTES = 2 * 1024 * 1024
 
 
 def _credentials_from_token(token: dict) -> Credentials:
@@ -43,6 +45,62 @@ def _credentials_to_token(creds: Credentials) -> dict:
         "client_secret": creds.client_secret,
         "scopes": list(creds.scopes or _SCOPES),
     }
+
+
+def _thumbnail_mime_type(thumbnail_path: Path) -> str:
+    return "image/png" if thumbnail_path.suffix.lower() == ".png" else "image/jpeg"
+
+
+def _validate_thumbnail_path(thumbnail_path: Path) -> str | None:
+    if not thumbnail_path.exists():
+        return f"arquivo de thumbnail nao encontrado em {thumbnail_path}"
+
+    suffix = thumbnail_path.suffix.lower()
+    if suffix not in _ALLOWED_THUMBNAIL_SUFFIXES:
+        allowed = ", ".join(sorted(_ALLOWED_THUMBNAIL_SUFFIXES))
+        return f"thumbnail com extensao invalida ({suffix or 'sem extensao'}). Use {allowed}"
+
+    size_bytes = thumbnail_path.stat().st_size
+    if size_bytes > _MAX_THUMBNAIL_BYTES:
+        size_mb = size_bytes / (1024 * 1024)
+        return f"thumbnail acima de 2 MB ({size_mb:.2f} MB)"
+
+    return None
+
+
+def _thumbnail_warning_from_message(detail: str) -> str:
+    return (
+        "Video publicado, mas a thumbnail nao foi aplicada no YouTube: "
+        f"{detail}. Envie a thumbnail manualmente no YouTube Studio."
+    )
+
+
+def _thumbnail_warning_from_http_error(exc: HttpError) -> str:
+    status_code = exc.resp.status
+    error_content = exc.content.decode("utf-8", errors="replace") if exc.content else ""
+    lowered = error_content.lower()
+
+    if status_code == 403:
+        if "quotaexceeded" in lowered or "dailylimitexceeded" in lowered:
+            detail = "quota da API do YouTube para thumbnails excedida"
+        elif "forbidden" in lowered or "insufficientpermissions" in lowered:
+            detail = "a conta conectada nao tem permissao para definir thumbnail customizada"
+        else:
+            detail = "o YouTube recusou a thumbnail por restricao de permissao ou politica"
+    elif status_code == 400:
+        if "invalidimage" in lowered or "media" in lowered:
+            detail = "o YouTube considerou a imagem da thumbnail invalida"
+        else:
+            detail = "o YouTube rejeitou a thumbnail por formato ou dados invalidos"
+    elif status_code == 404:
+        detail = "o video publicado nao foi encontrado ao tentar aplicar a thumbnail"
+    else:
+        detail = f"erro HTTP {status_code} ao enviar thumbnail"
+
+    warning = _thumbnail_warning_from_message(detail)
+    if error_content:
+        warning = f"{warning} Detalhe da API: {error_content}"
+    return warning
 
 
 class YouTubeUploader(Uploader):
@@ -132,25 +190,37 @@ class YouTubeUploader(Uploader):
                 logger.info("YouTube upload succeeded: %s", url)
 
                 thumbnail_status: str | None = None
+                warning: str | None = None
                 if thumbnail_path is not None:
                     # thumbnails.set costs 50 quota units per call; limit is 10 uploads/channel/24h via API
-                    try:
-                        thumb_mime = "image/png" if thumbnail_path.suffix.lower() == ".png" else "image/jpeg"
-                        thumb_media = MediaFileUpload(
-                            str(thumbnail_path),
-                            mimetype=thumb_mime,
-                            resumable=False,
-                        )
-                        youtube.thumbnails().set(
-                            videoId=video_id,
-                            media_body=thumb_media,
-                            media_mime_type=thumb_mime,
-                        ).execute()
-                        logger.info("thumbnail_status=uploaded video_id=%s", video_id)
-                        thumbnail_status = "uploaded"
-                    except Exception as exc:
-                        logger.warning("thumbnail_status=failed video_id=%s: %s", video_id, exc)
+                    validation_error = _validate_thumbnail_path(thumbnail_path)
+                    if validation_error is not None:
+                        warning = _thumbnail_warning_from_message(validation_error)
                         thumbnail_status = "failed"
+                        logger.warning("thumbnail_status=failed video_id=%s: %s", video_id, warning)
+                    else:
+                        try:
+                            thumb_mime = _thumbnail_mime_type(thumbnail_path)
+                            thumb_media = MediaFileUpload(
+                                str(thumbnail_path),
+                                mimetype=thumb_mime,
+                                resumable=False,
+                            )
+                            youtube.thumbnails().set(
+                                videoId=video_id,
+                                media_body=thumb_media,
+                                media_mime_type=thumb_mime,
+                            ).execute()
+                            logger.info("thumbnail_status=uploaded video_id=%s", video_id)
+                            thumbnail_status = "uploaded"
+                        except HttpError as exc:
+                            warning = _thumbnail_warning_from_http_error(exc)
+                            logger.warning("thumbnail_status=failed video_id=%s: %s", video_id, warning)
+                            thumbnail_status = "failed"
+                        except Exception as exc:
+                            warning = _thumbnail_warning_from_message(str(exc))
+                            logger.warning("thumbnail_status=failed video_id=%s: %s", video_id, warning)
+                            thumbnail_status = "failed"
                 else:
                     thumbnail_status = "skipped"
 
@@ -161,6 +231,7 @@ class YouTubeUploader(Uploader):
                     url=url,
                     video_id=video_id,
                     thumbnail_status=thumbnail_status,
+                    warning=warning,
                 )
 
             except HttpError as exc:

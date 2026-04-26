@@ -713,7 +713,18 @@ def _publish_clips_with_status(
                 record.youtube_url = result.url
 
             if result.status == "success":
-                _console.print(f"[green]✓ Clipe {i + 1} publicado em {platform}: {result.url}[/green]")
+                if platform == "youtube" and result.warning:
+                    _console.print(
+                        f"[yellow]! Clipe {i + 1} publicado em {platform}, mas a thumbnail falhou: "
+                        f"{result.warning} URL: {result.url}[/yellow]"
+                    )
+                elif platform == "youtube" and result.thumbnail_status == "uploaded":
+                    _console.print(
+                        f"[green]✓ Clipe {i + 1} publicado em {platform} com thumbnail aplicada: "
+                        f"{result.url}[/green]"
+                    )
+                else:
+                    _console.print(f"[green]✓ Clipe {i + 1} publicado em {platform}: {result.url}[/green]")
             else:
                 _console.print(f"[red]✗ Clipe {i + 1} falhou em {platform}: {result.error}[/red]")
 

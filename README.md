@@ -255,6 +255,11 @@ youcut cuts --history
 
 Use `--upload` para publicar os clipes gerados sem intervenção manual ao final do pipeline. O upload reutiliza os metadados exportados em cada `clip_N.txt` e suporta seleção de plataformas com `--platforms` e seleção de clipes com `--clips`.
 
+No caso do YouTube, o upload do vídeo e o envio da thumbnail são operações separadas. O CLI agora distingue:
+
+- sucesso completo: vídeo publicado com thumbnail aplicada;
+- publicação parcial: vídeo publicado, mas a thumbnail não foi aplicada e o CLI mostra um alerta acionável com a URL do vídeo.
+
 Flags principais:
 
 - `--upload`: ativa a etapa de publicação após a geração dos clipes
@@ -312,6 +317,18 @@ youcut auth status
 Observação importante:
 
 - apps do TikTok não auditados publicam vídeos como `private`; para postagem pública é necessário que o app passe pela auditoria do TikTok.
+
+#### YouTube
+
+O uploader do YouTube valida localmente a thumbnail antes de chamar `thumbnails.set`:
+
+- o arquivo precisa existir;
+- as extensões aceitas são `.png`, `.jpg` e `.jpeg`;
+- o tamanho máximo aceito é 2 MB.
+
+Se a validação local falhar, o vídeo continua sendo publicado e o resultado aparece como publicação parcial com alerta. O mesmo vale quando o YouTube aceita o vídeo, mas rejeita a thumbnail por motivos como permissão insuficiente, política, quota ou imagem inválida.
+
+A elegibilidade final para thumbnail customizada continua dependendo da conta conectada e das regras do próprio YouTube. Quando isso acontecer, o caminho esperado é usar a URL exibida pelo CLI e concluir o ajuste manualmente no YouTube Studio.
 
 ## Saída gerada
 

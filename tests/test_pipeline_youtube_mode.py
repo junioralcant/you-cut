@@ -350,7 +350,12 @@ class TestPublishClipsWithStatus:
 
         mock_uploader = MagicMock()
         mock_uploader.upload.return_value = MagicMock(
-            status="success", url="https://youtu.be/abc", video_id="abc", error=None
+            status="success",
+            url="https://youtu.be/abc",
+            video_id="abc",
+            error=None,
+            warning=None,
+            thumbnail_status="uploaded",
         )
 
         from youcut.cli import _publish_clips_with_status
@@ -368,7 +373,12 @@ class TestPublishClipsWithStatus:
 
         mock_uploader = MagicMock()
         mock_uploader.upload.return_value = MagicMock(
-            status="success", url="https://youtu.be/vid999", video_id="vid999", error=None
+            status="success",
+            url="https://youtu.be/vid999",
+            video_id="vid999",
+            error=None,
+            warning=None,
+            thumbnail_status="uploaded",
         )
 
         from youcut.cli import _publish_clips_with_status
@@ -387,7 +397,12 @@ class TestPublishClipsWithStatus:
 
         mock_uploader = MagicMock()
         mock_uploader.upload.return_value = MagicMock(
-            status="success", url="https://youtu.be/t1", video_id="t1", error=None
+            status="success",
+            url="https://youtu.be/t1",
+            video_id="t1",
+            error=None,
+            warning=None,
+            thumbnail_status="uploaded",
         )
 
         from youcut.cli import _publish_clips_with_status
@@ -436,7 +451,12 @@ class TestPublishClipsWithStatus:
 
         mock_uploader = MagicMock()
         mock_uploader.upload.return_value = MagicMock(
-            status="success", url="https://youtu.be/s1", video_id="s1", error=None
+            status="success",
+            url="https://youtu.be/s1",
+            video_id="s1",
+            error=None,
+            warning=None,
+            thumbnail_status="uploaded",
         )
 
         saved = []
@@ -486,7 +506,14 @@ class TestPublishClipsWithStatus:
         mock_uploader = MagicMock()
         mock_uploader.upload.side_effect = lambda path, meta, **kw: (
             captured_metadata.append(meta) or
-            MagicMock(status="success", url="https://youtu.be/x", video_id="x", error=None)
+            MagicMock(
+                status="success",
+                url="https://youtu.be/x",
+                video_id="x",
+                error=None,
+                warning=None,
+                thumbnail_status="uploaded",
+            )
         )
 
         from youcut.cli import _publish_clips_with_status
@@ -497,6 +524,58 @@ class TestPublishClipsWithStatus:
 
         assert len(captured_metadata) == 1
         assert captured_metadata[0].title == record_title
+
+    def test_partial_youtube_success_prints_warning_and_preserves_video_data(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+        record = self._make_record(tmp_path, thumbnail=True)
+
+        mock_uploader = MagicMock()
+        mock_uploader.upload.return_value = MagicMock(
+            status="success",
+            url="https://youtu.be/partial1",
+            video_id="partial1",
+            error=None,
+            warning="Video publicado, mas a thumbnail nao foi aplicada.",
+            thumbnail_status="failed",
+        )
+
+        from youcut.cli import _publish_clips_with_status
+        with patch("youcut.cli.YouTubeUploader", return_value=mock_uploader), \
+             patch("youcut.cli.InstagramUploader", return_value=MagicMock()), \
+             patch("youcut.cli.TikTokUploader", return_value=MagicMock()), \
+             patch("youcut.cli._console.print") as mock_print:
+            _publish_clips_with_status([record], ["youtube"], tmp_path / "creds")
+
+        printed = "\n".join(str(call.args[0]) for call in mock_print.call_args_list)
+        assert "thumbnail falhou" in printed
+        assert "https://youtu.be/partial1" in printed
+        assert record.upload_status["youtube"] == "success"
+        assert record.youtube_video_id == "partial1"
+        assert record.youtube_url == "https://youtu.be/partial1"
+
+    def test_complete_youtube_success_mentions_thumbnail_applied(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+        record = self._make_record(tmp_path, thumbnail=True)
+
+        mock_uploader = MagicMock()
+        mock_uploader.upload.return_value = MagicMock(
+            status="success",
+            url="https://youtu.be/full1",
+            video_id="full1",
+            error=None,
+            warning=None,
+            thumbnail_status="uploaded",
+        )
+
+        from youcut.cli import _publish_clips_with_status
+        with patch("youcut.cli.YouTubeUploader", return_value=mock_uploader), \
+             patch("youcut.cli.InstagramUploader", return_value=MagicMock()), \
+             patch("youcut.cli.TikTokUploader", return_value=MagicMock()), \
+             patch("youcut.cli._console.print") as mock_print:
+            _publish_clips_with_status([record], ["youtube"], tmp_path / "creds")
+
+        printed = "\n".join(str(call.args[0]) for call in mock_print.call_args_list)
+        assert "thumbnail aplicada" in printed
 
 
 # ---------------------------------------------------------------------------

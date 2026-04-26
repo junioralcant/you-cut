@@ -544,6 +544,97 @@ class TestUploadThumbnailStatus:
 
         assert result.status == "success"
         assert result.thumbnail_status == "failed"
+        assert result.warning is not None
+
+    @patch("youcut.uploader.youtube.build")
+    def test_missing_thumbnail_returns_warning_without_api_call(self, mock_build, tmp_path):
+        uploader = _make_uploader(tmp_path)
+
+        mock_youtube = MagicMock()
+        mock_build.return_value = mock_youtube
+        mock_request = MagicMock()
+        mock_youtube.videos.return_value.insert.return_value = mock_request
+        mock_request.next_chunk.return_value = (None, {"id": "vid_missing_thumb"})
+
+        video = tmp_path / "clip.mp4"
+        video.write_bytes(b"\x00" * 10)
+        thumbnail = tmp_path / "missing.jpg"
+
+        result = uploader.upload(video, _make_metadata(), thumbnail_path=thumbnail)
+
+        assert result.status == "success"
+        assert result.thumbnail_status == "failed"
+        assert "nao foi aplicada" in result.warning
+        mock_youtube.thumbnails.return_value.set.assert_not_called()
+
+    @patch("youcut.uploader.youtube.build")
+    def test_invalid_thumbnail_extension_returns_warning_without_api_call(self, mock_build, tmp_path):
+        uploader = _make_uploader(tmp_path)
+
+        mock_youtube = MagicMock()
+        mock_build.return_value = mock_youtube
+        mock_request = MagicMock()
+        mock_youtube.videos.return_value.insert.return_value = mock_request
+        mock_request.next_chunk.return_value = (None, {"id": "vid_bad_ext"})
+
+        video = tmp_path / "clip.mp4"
+        video.write_bytes(b"\x00" * 10)
+        thumbnail = tmp_path / "thumb.gif"
+        thumbnail.write_bytes(b"GIF89a")
+
+        result = uploader.upload(video, _make_metadata(), thumbnail_path=thumbnail)
+
+        assert result.status == "success"
+        assert result.thumbnail_status == "failed"
+        assert "extensao invalida" in result.warning
+        mock_youtube.thumbnails.return_value.set.assert_not_called()
+
+    @patch("youcut.uploader.youtube.build")
+    def test_oversized_thumbnail_returns_warning_without_api_call(self, mock_build, tmp_path):
+        uploader = _make_uploader(tmp_path)
+
+        mock_youtube = MagicMock()
+        mock_build.return_value = mock_youtube
+        mock_request = MagicMock()
+        mock_youtube.videos.return_value.insert.return_value = mock_request
+        mock_request.next_chunk.return_value = (None, {"id": "vid_big_thumb"})
+
+        video = tmp_path / "clip.mp4"
+        video.write_bytes(b"\x00" * 10)
+        thumbnail = tmp_path / "thumb.jpg"
+        thumbnail.write_bytes(b"\xff\xd8\xff" + (b"\x00" * (2 * 1024 * 1024)))
+
+        result = uploader.upload(video, _make_metadata(), thumbnail_path=thumbnail)
+
+        assert result.status == "success"
+        assert result.thumbnail_status == "failed"
+        assert "acima de 2 MB" in result.warning
+        mock_youtube.thumbnails.return_value.set.assert_not_called()
+
+    @patch("youcut.uploader.youtube.build")
+    def test_thumbnail_http_error_returns_actionable_warning(self, mock_build, tmp_path):
+        uploader = _make_uploader(tmp_path)
+
+        mock_youtube = MagicMock()
+        mock_build.return_value = mock_youtube
+        mock_request = MagicMock()
+        mock_youtube.videos.return_value.insert.return_value = mock_request
+        mock_request.next_chunk.return_value = (None, {"id": "vid_thumb_http_error"})
+        mock_youtube.thumbnails.return_value.set.return_value.execute.side_effect = _make_http_error(
+            403,
+            content=b'{"error":{"errors":[{"reason":"forbidden"}]}}',
+        )
+
+        video = tmp_path / "clip.mp4"
+        video.write_bytes(b"\x00" * 10)
+        thumbnail = tmp_path / "thumb.jpg"
+        thumbnail.write_bytes(b"\xff\xd8\xff")
+
+        result = uploader.upload(video, _make_metadata(), thumbnail_path=thumbnail)
+
+        assert result.status == "success"
+        assert result.thumbnail_status == "failed"
+        assert "permissao" in result.warning
 
     def test_thumbnail_status_field_serialization(self):
         for value in ("uploaded", "skipped", "failed", None):
@@ -552,10 +643,12 @@ class TestUploadThumbnailStatus:
                 clip_index=0,
                 status="success",
                 thumbnail_status=value,
+                warning="partial publish" if value == "failed" else None,
             )
             assert r.thumbnail_status == value
             data = r.model_dump()
             assert data["thumbnail_status"] == value
+            assert data["warning"] == ("partial publish" if value == "failed" else None)
 
 
 class TestUploadShortsDetection:

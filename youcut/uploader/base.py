@@ -21,6 +21,7 @@ class UploadResult(BaseModel):
     error: str | None = None
     video_id: str | None = None
     thumbnail_status: Literal["uploaded", "skipped", "failed"] | None = None
+    warning: str | None = None
 
 
 class UploadReport(BaseModel):
