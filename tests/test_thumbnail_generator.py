@@ -6,7 +6,7 @@ import openai
 import pytest
 
 from youcut.models import ClipRecord, ViralClip
-from youcut.thumbnail_generator import generate_thumbnail, regenerate_thumbnail
+from youcut.thumbnail_generator import generate_thumbnail, regenerate_thumbnail, _build_prompt
 
 _API_KEY = "test-api-key"
 _IMAGE_URL = "https://oaidalleapiprodscus.blob.core.windows.net/thumb.png"
@@ -51,12 +51,12 @@ def test_generate_calls_dalle_with_correct_params(mock_openai_cls, mock_download
     mock_openai_cls.return_value = mock_client
     mock_client.images.generate.return_value = _mock_openai_response()
 
-    generate_thumbnail(_make_clip(), "John Doe, brown hair", tmp_path, 1, _API_KEY)
+    generate_thumbnail(_make_clip(), "João Silva, cabelo castanho", tmp_path, 1, _API_KEY)
 
     mock_client.images.generate.assert_called_once()
     call_kwargs = mock_client.images.generate.call_args.kwargs
     assert call_kwargs["model"] == "dall-e-3"
-    assert call_kwargs["size"] == "1280x720"
+    assert call_kwargs["size"] == "1792x1024"
     assert call_kwargs["quality"] == "standard"
 
 
@@ -68,11 +68,58 @@ def test_prompt_contains_thumbnail_idea(mock_openai_cls, mock_download, tmp_path
     mock_client.images.generate.return_value = _mock_openai_response()
 
     clip = _make_clip()
-    generate_thumbnail(clip, "face context here", tmp_path, 1, _API_KEY)
+    generate_thumbnail(clip, "contexto de rosto aqui", tmp_path, 1, _API_KEY)
 
     prompt = mock_client.images.generate.call_args.kwargs["prompt"]
     assert clip.thumbnail_idea in prompt
-    assert "face context here" in prompt
+    assert "contexto de rosto aqui" in prompt
+
+
+@patch("youcut.thumbnail_generator._download_image")
+@patch("youcut.thumbnail_generator.openai.OpenAI")
+def test_prompt_is_in_portuguese(mock_openai_cls, mock_download, tmp_path):
+    mock_client = MagicMock()
+    mock_openai_cls.return_value = mock_client
+    mock_client.images.generate.return_value = _mock_openai_response()
+
+    generate_thumbnail(_make_clip(), "", tmp_path, 1, _API_KEY)
+
+    prompt = mock_client.images.generate.call_args.kwargs["prompt"]
+    assert "Thumbnail" in prompt or "thumbnail" in prompt
+    assert "YouTube" in prompt
+
+
+@patch("youcut.thumbnail_generator._describe_frame_characters")
+@patch("youcut.thumbnail_generator._download_image")
+@patch("youcut.thumbnail_generator.openai.OpenAI")
+def test_generate_uses_frame_description_when_clip_path_provided(
+    mock_openai_cls, mock_download, mock_describe, tmp_path
+):
+    mock_client = MagicMock()
+    mock_openai_cls.return_value = mock_client
+    mock_client.images.generate.return_value = _mock_openai_response()
+    mock_describe.return_value = "Homem de terno azul, cabelos grisalhos"
+
+    fake_clip = tmp_path / "clip.mp4"
+    fake_clip.write_bytes(b"fake")
+
+    generate_thumbnail(_make_clip(), "", tmp_path, 1, _API_KEY, clip_path=fake_clip)
+
+    mock_describe.assert_called_once()
+    prompt = mock_client.images.generate.call_args.kwargs["prompt"]
+    assert "Homem de terno azul" in prompt
+
+
+@patch("youcut.thumbnail_generator._download_image")
+@patch("youcut.thumbnail_generator.openai.OpenAI")
+def test_generate_skips_frame_extraction_when_clip_path_missing(mock_openai_cls, mock_download, tmp_path):
+    mock_client = MagicMock()
+    mock_openai_cls.return_value = mock_client
+    mock_client.images.generate.return_value = _mock_openai_response()
+
+    generate_thumbnail(_make_clip(), "", tmp_path, 1, _API_KEY, clip_path=None)
+
+    mock_client.images.generate.assert_called_once()
 
 
 @patch("youcut.thumbnail_generator.httpx.get")

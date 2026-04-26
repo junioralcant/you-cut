@@ -602,11 +602,15 @@ def _publish_clips_with_status(
             _console.print(f"[dim]Publicando clipe {i + 1}/{len(records)} em {platform}...[/dim]")
             uploader = uploader_map[platform]
             try:
+                hashtag_line = " ".join(f"#{tag.lstrip('#')}" for tag in record.hashtags) if record.hashtags else ""
+                full_description = record.description
+                if hashtag_line:
+                    full_description = f"{full_description}\n\n{hashtag_line}" if full_description else hashtag_line
                 metadata = ClipMetadata(
                     title=record.title,
-                    description=record.title,
-                    hashtags=[],
-                    caption=record.title,
+                    description=full_description or record.title,
+                    hashtags=record.hashtags,
+                    caption=full_description or record.title,
                 )
                 if platform == "youtube":
                     result = uploader.upload(
@@ -750,7 +754,8 @@ def run_flow_a(
             task_th = progress.add_task("Gerando thumbnails (DALL-E 3)...", total=len(viral_clips))
             for i, clip in enumerate(viral_clips):
                 try:
-                    thumb = generate_thumbnail(clip, "", output_dir, i, config.openai_api_key)
+                    clip_path_for_thumb = clip_paths[i] if i < len(clip_paths) else None
+                    thumb = generate_thumbnail(clip, "", output_dir, i, config.openai_api_key, clip_path=clip_path_for_thumb)
                     thumbnail_paths.append(thumb)
                 except Exception as e:
                     logger.warning("Falha ao gerar thumbnail %d: %s", i + 1, e)
@@ -770,6 +775,8 @@ def run_flow_a(
             clip_path=clip_path,
             thumbnail_path=thumb,
             approved=True,
+            description=clip.description,
+            hashtags=clip.hashtags,
         ))
 
     if not skip_review:
@@ -931,6 +938,8 @@ def run_flow_b(
             clip_path=cp,
             thumbnail_path=None,
             approved=True,
+            description=sc.description,
+            hashtags=sc.hashtags,
         ))
         valid_clips.append(sc)
 
@@ -1027,6 +1036,8 @@ def run_flow_c(
             clip_path=clip_path,
             thumbnail_path=None,
             approved=True,
+            description=clip.description,
+            hashtags=clip.hashtags,
         ))
 
     if not skip_review:

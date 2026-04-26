@@ -134,15 +134,16 @@ class YouTubeUploader(Uploader):
                 if thumbnail_path is not None:
                     # thumbnails.set costs 50 quota units per call; limit is 10 uploads/channel/24h via API
                     try:
+                        thumb_mime = "image/png" if thumbnail_path.suffix.lower() == ".png" else "image/jpeg"
                         thumb_media = MediaFileUpload(
                             str(thumbnail_path),
-                            mimetype="image/jpeg",
+                            mimetype=thumb_mime,
                             resumable=False,
                         )
                         youtube.thumbnails().set(
                             videoId=video_id,
                             media_body=thumb_media,
-                            media_mime_type="image/jpeg",
+                            media_mime_type=thumb_mime,
                         ).execute()
                         logger.info("YouTube thumbnail enviada: video_id=%s", video_id)
                     except Exception as exc:
