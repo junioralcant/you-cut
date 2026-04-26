@@ -133,7 +133,7 @@ def test_upload_fields_can_be_overridden(monkeypatch):
 def test_pipeline_config_new_fields_defaults(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     from youcut.config import PipelineConfig
-    config = PipelineConfig()
+    config = PipelineConfig(_env_file=None, openai_api_key=None)
     assert config.cut_mode == "social"
     assert config.max_clips is None
     assert config.openai_api_key is None
