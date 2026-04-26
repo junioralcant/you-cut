@@ -45,9 +45,17 @@ Para cada task na lista ordenada:
 - Não avance para a revisão se a implementação falhar ou os testes não passarem.
 
 **3c. Executar Review da Task**
-- Após a implementação bem-sucedida, execute o workflow completo da skill `task-review/SKILL.md`.
-- Leia `../task-review/SKILL.md` e siga todos os passos.
-- O review deve produzir um dos três vereditos: `APPROVED`, `APPROVED WITH OBSERVATIONS` ou `REJECTED`.
+
+Antes de chamar a skill `task-review`, verifique se a skill `executar-task` já ativou o agente `task-reviewer` durante o passo 3b:
+
+- **Se o agente `task-reviewer` já foi ativado por `executar-task` e o resultado foi `APPROVED` ou `APPROVED WITH OBSERVATIONS`:**
+  - Não chame `task-review` novamente — o review já está concluído.
+  - Use o veredito já obtido para o passo 3d.
+
+- **Se o agente `task-reviewer` não foi ativado, foi pulado, ou produziu `REJECTED`:**
+  - Execute o workflow completo da skill `task-review/SKILL.md`.
+  - Leia `../task-review/SKILL.md` e siga todos os passos.
+  - O review deve produzir um dos três vereditos: `APPROVED`, `APPROVED WITH OBSERVATIONS` ou `REJECTED`.
 
 **3d. Avaliar Resultado do Review**
 
@@ -58,11 +66,13 @@ Para cada task na lista ordenada:
   - Avance para a próxima task (volte ao passo 3a).
 
 - Se `REJECTED`:
-  - **Interrompa o pipeline imediatamente.**
-  - Apresente ao usuário o relatório de review completo com todos os problemas encontrados.
-  - Aguarde instrução do usuário sobre como proceder.
-  - **Não execute a próxima task** até que o usuário resolva os problemas e solicite retomada.
-  - Após correções do usuário, execute `/clear` para limpar o contexto e repita apenas o passo 3b (re-implementação) e 3c (re-review) para a task rejeitada antes de continuar.
+  - **Não interrompa o pipeline nem aguarde ação do usuário.**
+  - Analise o relatório de review e identifique todos os problemas apontados.
+  - Corrija automaticamente os problemas encontrados, endereçando cada item do veredito REJECTED.
+  - Após as correções, execute `/clear` para limpar o contexto.
+  - Re-execute o review (passo 3c) para a mesma task.
+  - Se o novo veredito for `APPROVED` ou `APPROVED WITH OBSERVATIONS`, informe ao usuário o que foi corrigido e o motivo da reprovação original, e avance para a próxima task.
+  - Se o novo veredito for `REJECTED` novamente após a tentativa de correção automática, **aí sim interrompa o pipeline**, apresente ao usuário o relatório completo e aguarde instrução — pois o problema pode exigir decisão humana.
 
 **Step 4: Relatório Final (Obrigatório)**
 
@@ -84,5 +94,5 @@ Ao concluir todas as tasks (ou ao ser interrompido por um REJECTED não resolvid
 
 - Se o arquivo `tasks.md` não for encontrado, encerre e informe o usuário.
 - Se a feature slug não puder ser determinada, solicite ao usuário que informe o caminho correto.
-- Se a implementação de uma task falhar (testes não passam, erro crítico), trate como REJECTED implícito: interrompa e reporte ao usuário.
+- Se a implementação de uma task falhar (testes não passam, erro crítico), trate como REJECTED implícito: tente corrigir automaticamente os erros antes de interromper. Só reporte ao usuário se a segunda tentativa também falhar.
 - Se o review não produzir um veredito claro, solicite ao usuário que avalie manualmente antes de continuar.
