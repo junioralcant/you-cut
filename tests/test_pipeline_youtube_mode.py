@@ -201,46 +201,15 @@ class TestFlowAYouTubeClipFormat:
         # The clip passed to cut_clip must have cut_mode="youtube"
         assert cut_calls[0].cut_mode == "youtube"
 
-    def test_no_thumbnail_generated_without_openai_key(
+    def test_thumbnail_always_generated(
         self, tmp_path, monkeypatch, mock_transcription, mock_viral_clip_youtube, video_path, clip_path
     ):
-        """When openai_api_key is absent, no thumbnails are generated."""
-        # chdir to tmp_path so pydantic-settings doesn't pick up the project's .env
+        """generate_thumbnail is always called, regardless of openai_api_key."""
         monkeypatch.chdir(tmp_path)
         monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
         from youcut.config import PipelineConfig
         config = PipelineConfig(cut_mode="youtube", output_dir=tmp_path / "output")
-        assert config.openai_api_key is None
-
-        with (
-            patch("youcut.cli.download_video", return_value=video_path),
-            patch("youcut.cli.transcribe", return_value=mock_transcription),
-            patch("youcut.cli.analyze", return_value=[mock_viral_clip_youtube]),
-            patch("youcut.cli.cut_clip", return_value=clip_path),
-            patch("youcut.cli.save_session", return_value=Path("/tmp/s.json")),
-            patch("youcut.cli.generate_thumbnail") as mock_thumb,
-        ):
-            from youcut.cli import run_flow_a
-            run_flow_a(
-                "https://youtube.com/watch?v=test",
-                config,
-                skip_review=True,
-                upload=False,
-            )
-
-        mock_thumb.assert_not_called()
-
-    def test_thumbnail_generated_when_openai_key_present(
-        self, tmp_path, monkeypatch, mock_transcription, mock_viral_clip_youtube, video_path, clip_path
-    ):
-        """When openai_api_key is set, generate_thumbnail is called for each clip."""
-        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
-        monkeypatch.setenv("OPENAI_API_KEY", "openai-test-key")
-
-        from youcut.config import PipelineConfig
-        config = PipelineConfig(cut_mode="youtube", output_dir=tmp_path / "output")
-        assert config.openai_api_key == "openai-test-key"
 
         thumb_path = tmp_path / "output" / "test_video" / "thumbnails" / "clip_00.png"
         thumb_path.parent.mkdir(parents=True, exist_ok=True)
@@ -263,7 +232,38 @@ class TestFlowAYouTubeClipFormat:
             )
 
         mock_thumb.assert_called_once()
-        # Session should have the thumbnail path set
+
+    def test_thumbnail_generated_when_openai_key_present(
+        self, tmp_path, monkeypatch, mock_transcription, mock_viral_clip_youtube, video_path, clip_path
+    ):
+        """generate_thumbnail is called for each clip (OpenAI key no longer required)."""
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+        monkeypatch.setenv("OPENAI_API_KEY", "openai-test-key")
+
+        from youcut.config import PipelineConfig
+        config = PipelineConfig(cut_mode="youtube", output_dir=tmp_path / "output")
+
+        thumb_path = tmp_path / "output" / "test_video" / "thumbnails" / "clip_00.png"
+        thumb_path.parent.mkdir(parents=True, exist_ok=True)
+        thumb_path.touch()
+
+        with (
+            patch("youcut.cli.download_video", return_value=video_path),
+            patch("youcut.cli.transcribe", return_value=mock_transcription),
+            patch("youcut.cli.analyze", return_value=[mock_viral_clip_youtube]),
+            patch("youcut.cli.cut_clip", return_value=clip_path),
+            patch("youcut.cli.save_session", return_value=Path("/tmp/s.json")),
+            patch("youcut.cli.generate_thumbnail", return_value=thumb_path) as mock_thumb,
+        ):
+            from youcut.cli import run_flow_a
+            run_flow_a(
+                "https://youtube.com/watch?v=test",
+                config,
+                skip_review=True,
+                upload=False,
+            )
+
+        mock_thumb.assert_called_once()
 
 
 class TestFlowAUploadPrompt:

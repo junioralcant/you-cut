@@ -115,3 +115,10 @@ class ViralClip(BaseModel):
         if not 0 <= v <= 10:
             raise ValueError(f"viral_score must be between 0 and 10, got {v}")
         return v
+
+
+class ThumbnailFrameResult(BaseModel):
+    frame_timestamp: float
+    frame_score: float
+    segmentation_applied: bool
+    output_path: Path

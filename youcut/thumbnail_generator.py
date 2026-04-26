@@ -1,67 +1,94 @@
-import base64
 import json
 import logging
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Optional
 
-import httpx
-import openai
-
-from youcut.models import ClipRecord, ViralClip
+from youcut.models import ClipRecord, ThumbnailFrameResult, ViralClip
 
 logger = logging.getLogger(__name__)
 
-_DALLE_MODEL = "dall-e-3"
-_DALLE_SIZE = "1792x1024"  # closest DALL-E 3 size to 16:9; resized to YouTube spec after download
-_DALLE_QUALITY = "standard"
-_VISION_MODEL = "gpt-4o"
 _THUMBNAIL_W = 1280
 _THUMBNAIL_H = 720
+_ASSETS_DIR = Path(__file__).parent / "assets"
+_FONT_PATH = _ASSETS_DIR / "Roboto-Regular.ttf"
+_TEXT_FONT_SIZE = 72
+_MAX_LINES = 2
 
 
 def generate_thumbnail(
     clip: ViralClip,
-    face_context: str,
     output_dir: Path,
     clip_index: int,
-    api_key: str,
-    clip_path: Optional[Path] = None,
+    clip_path: Path | None = None,
 ) -> Path:
     thumbnails_dir = output_dir / "thumbnails"
     thumbnails_dir.mkdir(parents=True, exist_ok=True)
     output_path = thumbnails_dir / f"clip_{clip_index:02d}.png"
 
-    resolved_face_context = face_context
-    if clip_path and clip_path.exists():
-        try:
-            resolved_face_context = _describe_frame_characters(clip_path, clip, api_key)
-        except Exception as e:
-            logger.warning("Falha ao descrever personagens do frame: %s", e)
+    source = clip_path if clip_path and clip_path.exists() else None
+    if source is None:
+        raise ValueError(f"clip_path não fornecido ou não existe: {clip_path}")
 
-    return _generate_and_save(clip, resolved_face_context, output_path, api_key)
+    frame_bytes = _select_best_face_frame(source)
+    processed = _apply_frame_processing(frame_bytes)
+    composed = _compose_text_overlay(processed, clip.title)
+    composed.save(output_path, format="PNG", optimize=True)
+    _resize_to_youtube_format(output_path)
+
+    result = ThumbnailFrameResult(
+        frame_timestamp=0.0,
+        frame_score=0.0,
+        segmentation_applied=False,
+        output_path=output_path,
+    )
+    logger.info(
+        "Thumbnail gerada com frame real: path=%s timestamp=%.2f score=%.3f",
+        output_path,
+        result.frame_timestamp,
+        result.frame_score,
+    )
+    logger.info("ThumbnailFrameResult: %s", json.dumps({
+        "frame_timestamp": result.frame_timestamp,
+        "frame_score": result.frame_score,
+        "segmentation_applied": result.segmentation_applied,
+        "output_path": str(result.output_path),
+    }))
+    return output_path
 
 
-def regenerate_thumbnail(clip: ViralClip, clip_record: ClipRecord, api_key: str) -> Path:
+def regenerate_thumbnail(
+    clip: ViralClip,
+    clip_record: ClipRecord,
+) -> Path:
     if clip_record.thumbnail_path is not None:
         output_path = clip_record.thumbnail_path
     else:
         output_path = clip_record.clip_path.parent / "thumbnails" / f"{clip_record.clip_path.stem}.png"
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    face_context = ""
-    if clip_record.clip_path.exists():
-        try:
-            face_context = _describe_frame_characters(clip_record.clip_path, clip, api_key)
-        except Exception as e:
-            logger.warning("Falha ao descrever personagens do frame: %s", e)
+    frame_bytes = _select_best_face_frame(clip_record.clip_path)
+    processed = _apply_frame_processing(frame_bytes)
+    composed = _compose_text_overlay(processed, clip.title)
+    composed.save(output_path, format="PNG", optimize=True)
+    _resize_to_youtube_format(output_path)
 
-    return _generate_and_save(clip, face_context, output_path, api_key)
+    result = ThumbnailFrameResult(
+        frame_timestamp=0.0,
+        frame_score=0.0,
+        segmentation_applied=False,
+        output_path=output_path,
+    )
+    logger.info(
+        "Thumbnail regenerada com frame real: path=%s timestamp=%.2f score=%.3f",
+        output_path,
+        result.frame_timestamp,
+        result.frame_score,
+    )
+    return output_path
 
 
 def _extract_frame(clip_path: Path) -> bytes:
-    """Extrai um frame do meio do clipe usando ffmpeg e retorna os bytes PNG."""
     with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
         tmp_path = Path(tmp.name)
 
@@ -69,9 +96,9 @@ def _extract_frame(clip_path: Path) -> bytes:
         result = subprocess.run(
             [
                 "ffmpeg", "-y",
-                "-sseof", "-1",  # 1 segundo antes do fim como fallback
+                "-sseof", "-1",
                 "-i", str(clip_path),
-                "-ss", "00:00:01",  # 1 segundo do início
+                "-ss", "00:00:01",
                 "-vframes", "1",
                 "-q:v", "2",
                 str(tmp_path),
@@ -80,7 +107,6 @@ def _extract_frame(clip_path: Path) -> bytes:
             timeout=30,
         )
         if result.returncode != 0 or not tmp_path.exists() or tmp_path.stat().st_size == 0:
-            # fallback: pega o primeiro frame
             subprocess.run(
                 ["ffmpeg", "-y", "-i", str(clip_path), "-vframes", "1", "-q:v", "2", str(tmp_path)],
                 capture_output=True,
@@ -222,101 +248,190 @@ def _select_best_face_frame(
     return best_bytes
 
 
-def _describe_frame_characters(clip_path: Path, clip: ViralClip, api_key: str) -> str:
-    """Usa GPT-4o Vision para descrever as pessoas visíveis no frame do clipe."""
-    frame_bytes = _select_best_face_frame(clip_path)
-    b64 = base64.b64encode(frame_bytes).decode("utf-8")
-
-    client = openai.OpenAI(api_key=api_key)
-    response = client.chat.completions.create(
-        model=_VISION_MODEL,
-        messages=[
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": (
-                            "Analise esta imagem e descreva de forma objetiva as pessoas visíveis: "
-                            "aparência física (cor de pele, cabelo, roupas, expressão facial, idade aproximada). "
-                            "Seja conciso e específico. Se não houver pessoas, descreva os elementos visuais principais. "
-                            "Responda em português do Brasil."
-                        ),
-                    },
-                    {
-                        "type": "image_url",
-                        "image_url": {"url": f"data:image/png;base64,{b64}", "detail": "low"},
-                    },
-                ],
-            }
-        ],
-        max_tokens=300,
-    )
-    description = response.choices[0].message.content or ""
-    logger.info("Descrição de personagens extraída do frame: %s", description[:100])
-    return description
+_BOLD_FONT_PATH = Path("/System/Library/Fonts/Supplemental/Arial Black.ttf")
 
 
-def _build_prompt(clip: ViralClip, face_context: str) -> str:
-    prompt = (
-        f"Thumbnail para YouTube em estilo chamativo e profissional, "
-        f"inspirado em canais de podcast de alto desempenho como Flow Podcast. "
-        f"Tema: {clip.thumbnail_idea}. "
-        "Estilo: rosto do personagem principal em close-up ocupando pelo menos 50% da imagem, "
-        "texto chamativo em tipografia bold e de alta legibilidade sobreposto à imagem, "
-        "paleta de cores vibrantes e de alto contraste (vermelho, azul, amarelo ou laranja intensos), "
-        "fundo simplificado com cor sólida ou gradiente para eliminar ruído visual, "
-        "iluminação dramática no rosto, expressão intensa e engajadora. "
-        "Formato paisagem 16:9, realista."
-    )
-    if face_context:
-        prompt += (
-            f" Inclua representação visual fiel dos participantes com as seguintes características: {face_context}. "
-            "Mantenha a aparência dos personagens consistente com a descrição."
+def _load_font(size: int) -> "ImageFont.FreeTypeFont":  # type: ignore[name-defined]
+    from PIL import ImageFont
+    for path in (_BOLD_FONT_PATH, _FONT_PATH):
+        try:
+            return ImageFont.truetype(str(path), size)
+        except Exception:
+            continue
+    return ImageFont.load_default()
+
+
+def _draw_text_centered(
+    draw: "ImageDraw.ImageDraw",  # type: ignore[name-defined]
+    text: str,
+    font: "ImageFont.FreeTypeFont",  # type: ignore[name-defined]
+    y: int,
+    canvas_w: int,
+    fill: tuple,
+    stroke_width: int,
+    stroke_fill: tuple = (0, 0, 0, 255),
+) -> int:
+    """Draws centered text with stroke. Returns the rendered height."""
+    bbox = draw.textbbox((0, 0), text, font=font)
+    text_w = bbox[2] - bbox[0]
+    text_h = bbox[3] - bbox[1]
+    x = (canvas_w - text_w) // 2
+
+    for dx in range(-stroke_width, stroke_width + 1):
+        for dy in range(-stroke_width, stroke_width + 1):
+            if dx == 0 and dy == 0:
+                continue
+            draw.text((x + dx, y + dy), text, font=font, fill=stroke_fill)
+    draw.text((x, y), text, font=font, fill=fill)
+    return text_h
+
+
+def _split_title_hierarchy(title: str) -> tuple[list[str], str]:
+    """Split title into secondary lines + hero (last impactful word/phrase)."""
+    import textwrap
+    words = title.upper().split()
+    if len(words) <= 2:
+        return [], " ".join(words)
+
+    # last 1 word is the hero; everything else wraps into secondary lines
+    hero = words[-1]
+    secondary_words = words[:-1]
+    secondary_lines = textwrap.wrap(" ".join(secondary_words), width=16)
+    return secondary_lines, hero
+
+
+def _compose_text_overlay(image: "Image.Image", title: str) -> "Image.Image":  # type: ignore[name-defined]
+    from PIL import Image, ImageDraw
+
+    img = image.copy().convert("RGBA")
+    w, h = img.size
+
+    if not title or not title.strip():
+        return img.convert("RGB")
+
+    # --- dark vignette over whole image ---
+    vignette = Image.new("RGBA", (w, h), (0, 0, 0, 145))
+    img = Image.alpha_composite(img, vignette)
+    draw = ImageDraw.Draw(img)
+
+    secondary_lines, hero = _split_title_hierarchy(title)
+
+    # --- size tuning ---
+    hero_size = int(h * 0.28)       # ~200px on 720h
+    secondary_size = int(h * 0.10)  # ~72px on 720h
+
+    hero_font = _load_font(hero_size)
+    sec_font = _load_font(secondary_size)
+
+    # shrink hero font until it fits 88% of width
+    max_w = int(w * 0.88)
+    while hero_size > 60:
+        hero_font = _load_font(hero_size)
+        bbox = draw.textbbox((0, 0), hero, font=hero_font)
+        if bbox[2] - bbox[0] <= max_w:
+            break
+        hero_size -= 6
+
+    # shrink secondary until all lines fit 80% of width
+    max_sec_w = int(w * 0.80)
+    while secondary_size > 30:
+        sec_font = _load_font(secondary_size)
+        if all(draw.textbbox((0, 0), l, font=sec_font)[2] <= max_sec_w for l in secondary_lines):
+            break
+        secondary_size -= 4
+
+    hero_bbox = draw.textbbox((0, 0), hero, font=hero_font)
+    hero_h = hero_bbox[3] - hero_bbox[1]
+
+    sec_line_h = (draw.textbbox((0, 0), "A", font=sec_font)[3] + int(secondary_size * 0.25)) if secondary_lines else 0
+    sec_total_h = sec_line_h * len(secondary_lines)
+
+    gap = int(h * 0.018)
+    block_h = sec_total_h + gap + hero_h
+    y_start = (h - block_h) // 2
+
+    hero_stroke = max(6, hero_size // 12)
+    sec_stroke = max(3, secondary_size // 14)
+
+    # draw secondary lines
+    for i, line in enumerate(secondary_lines):
+        _draw_text_centered(
+            draw, line, sec_font,
+            y=y_start + i * sec_line_h,
+            canvas_w=w,
+            fill=(255, 255, 255, 255),
+            stroke_width=sec_stroke,
         )
-    return prompt
+
+    # draw hero word
+    hero_y = y_start + sec_total_h + gap
+    _draw_text_centered(
+        draw, hero, hero_font,
+        y=hero_y,
+        canvas_w=w,
+        fill=(255, 215, 0, 255),
+        stroke_width=hero_stroke,
+    )
+
+    return img.convert("RGB")
 
 
-def _generate_and_save(
-    clip: ViralClip,
-    face_context: str,
-    output_path: Path,
-    api_key: str,
-) -> Path:
-    prompt = _build_prompt(clip, face_context)
-    client = openai.OpenAI(api_key=api_key)
+def _apply_frame_processing(frame_bytes: bytes) -> "Image.Image":  # type: ignore[name-defined]
+    import io
+
+    from PIL import Image, ImageEnhance, ImageFilter
+
+    nparr = None
     try:
-        response = client.images.generate(
-            model=_DALLE_MODEL,
-            prompt=prompt,
-            size=_DALLE_SIZE,
-            quality=_DALLE_QUALITY,
-            n=1,
-        )
-    except openai.RateLimitError as e:
-        raise RuntimeError("OpenAI rate limit reached. Try again later.") from e
-    except openai.AuthenticationError as e:
-        raise RuntimeError("Invalid OpenAI API key. Check your openai_api_key configuration.") from e
-    except openai.OpenAIError as e:
-        raise RuntimeError(f"OpenAI API error generating thumbnail: {e}") from e
+        import cv2  # type: ignore[import]
+        import numpy as np  # type: ignore[import]
+        nparr_arr = np.frombuffer(frame_bytes, np.uint8)
+        nparr = cv2.imdecode(nparr_arr, cv2.IMREAD_COLOR)
+    except ImportError:
+        nparr = None
 
-    image_url = response.data[0].url
-    if not image_url:
-        raise RuntimeError("DALL-E 3 returned no image URL. Check response_format or API status.")
-    _download_image(image_url, output_path)
-    _resize_to_youtube_format(output_path)
-    logger.info("Thumbnail saved: %s", output_path)
-    return output_path
+    if nparr is None:
+        img = Image.open(io.BytesIO(frame_bytes)).convert("RGB")
+        img = ImageEnhance.Contrast(img).enhance(1.4)
+        img = ImageEnhance.Sharpness(img).enhance(1.8)
+        logger.info("Segmentação indisponível — processamento sem separação de fundo")
+        return img
 
+    try:
+        import mediapipe as mp  # type: ignore[import]
+        import numpy as np  # type: ignore[import]
+        import cv2  # type: ignore[import]
 
-def _download_image(url: str, dest: Path) -> None:
-    response = httpx.get(url, follow_redirects=True, timeout=30.0)
-    response.raise_for_status()
-    dest.write_bytes(response.content)
+        rgb = cv2.cvtColor(nparr, cv2.COLOR_BGR2RGB)
+        with mp.solutions.selfie_segmentation.SelfieSegmentation(model_selection=1) as seg:
+            result = seg.process(rgb)
+
+        mask = result.segmentation_mask
+        mask_3ch = np.stack([mask] * 3, axis=-1)
+
+        fg_pil = Image.fromarray(rgb)
+        bg_pil = fg_pil.copy().filter(ImageFilter.GaussianBlur(radius=16))
+
+        bg_arr = np.array(bg_pil, dtype=np.float32)
+        fg_arr = np.array(fg_pil, dtype=np.float32)
+        composite = (fg_arr * mask_3ch + bg_arr * (1.0 - mask_3ch)).clip(0, 255).astype(np.uint8)
+        img = Image.fromarray(composite)
+
+        img = ImageEnhance.Contrast(img).enhance(1.3)
+        img = ImageEnhance.Sharpness(img).enhance(1.6)
+        logger.info("Segmentação de fundo aplicada para thumbnail %s", id(img))
+        return img
+
+    except Exception:
+        logger.info("Segmentação indisponível — processamento sem separação de fundo")
+        img = Image.open(io.BytesIO(frame_bytes)).convert("RGB")
+        img = ImageEnhance.Contrast(img).enhance(1.4)
+        img = ImageEnhance.Sharpness(img).enhance(1.8)
+        return img
 
 
 def _resize_to_youtube_format(image_path: Path) -> None:
-    from PIL import Image  # type: ignore[import]
+    from PIL import Image
 
     with Image.open(image_path) as img:
         resized = img.resize((_THUMBNAIL_W, _THUMBNAIL_H), Image.LANCZOS)

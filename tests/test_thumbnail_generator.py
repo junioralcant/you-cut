@@ -1,27 +1,25 @@
+import io
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import httpx
-import openai
 import pytest
+from PIL import Image
 
 from youcut.models import ClipRecord, ViralClip
 from youcut.thumbnail_generator import (
-    generate_thumbnail,
-    regenerate_thumbnail,
-    _build_prompt,
-    _select_best_face_frame,
+    _apply_frame_processing,
+    _compose_text_overlay,
     _resize_to_youtube_format,
+    _select_best_face_frame,
+    generate_thumbnail,
 )
 
-_API_KEY = "test-api-key"
-_IMAGE_URL = "https://oaidalleapiprodscus.blob.core.windows.net/thumb.png"
-_FAKE_PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 100  # fake PNG bytes
+_FAKE_PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 100
 
 
 def _make_clip() -> ViralClip:
     return ViralClip(
-        title="Top Moment",
+        title="Momento Viral Incrível",
         reason="High energy",
         viral_score=9.0,
         start_time=60.0,
@@ -33,229 +31,11 @@ def _make_clip() -> ViralClip:
     )
 
 
-def _mock_openai_response(url: str = _IMAGE_URL) -> MagicMock:
-    img = MagicMock()
-    img.url = url
-    response = MagicMock()
-    response.data = [img]
-    return response
-
-
-def _make_httpx_side_effect(content: bytes = _FAKE_PNG):
-    def _get(url, **kwargs):
-        resp = MagicMock(spec=httpx.Response)
-        resp.content = content
-        resp.raise_for_status = MagicMock()
-        return resp
-    return _get
-
-
-@patch("youcut.thumbnail_generator._resize_to_youtube_format")
-@patch("youcut.thumbnail_generator._download_image")
-@patch("youcut.thumbnail_generator.openai.OpenAI")
-def test_generate_calls_dalle_with_correct_params(mock_openai_cls, mock_download, mock_resize, tmp_path):
-    mock_client = MagicMock()
-    mock_openai_cls.return_value = mock_client
-    mock_client.images.generate.return_value = _mock_openai_response()
-
-    generate_thumbnail(_make_clip(), "João Silva, cabelo castanho", tmp_path, 1, _API_KEY)
-
-    mock_client.images.generate.assert_called_once()
-    call_kwargs = mock_client.images.generate.call_args.kwargs
-    assert call_kwargs["model"] == "dall-e-3"
-    assert call_kwargs["size"] == "1792x1024"
-    assert call_kwargs["quality"] == "standard"
-
-
-@patch("youcut.thumbnail_generator._resize_to_youtube_format")
-@patch("youcut.thumbnail_generator._download_image")
-@patch("youcut.thumbnail_generator.openai.OpenAI")
-def test_prompt_contains_thumbnail_idea(mock_openai_cls, mock_download, mock_resize, tmp_path):
-    mock_client = MagicMock()
-    mock_openai_cls.return_value = mock_client
-    mock_client.images.generate.return_value = _mock_openai_response()
-
-    clip = _make_clip()
-    generate_thumbnail(clip, "contexto de rosto aqui", tmp_path, 1, _API_KEY)
-
-    prompt = mock_client.images.generate.call_args.kwargs["prompt"]
-    assert clip.thumbnail_idea in prompt
-    assert "contexto de rosto aqui" in prompt
-
-
-@patch("youcut.thumbnail_generator._resize_to_youtube_format")
-@patch("youcut.thumbnail_generator._download_image")
-@patch("youcut.thumbnail_generator.openai.OpenAI")
-def test_prompt_is_in_portuguese(mock_openai_cls, mock_download, mock_resize, tmp_path):
-    mock_client = MagicMock()
-    mock_openai_cls.return_value = mock_client
-    mock_client.images.generate.return_value = _mock_openai_response()
-
-    generate_thumbnail(_make_clip(), "", tmp_path, 1, _API_KEY)
-
-    prompt = mock_client.images.generate.call_args.kwargs["prompt"]
-    assert "Thumbnail" in prompt or "thumbnail" in prompt
-    assert "YouTube" in prompt
-
-
-@patch("youcut.thumbnail_generator._resize_to_youtube_format")
-@patch("youcut.thumbnail_generator._describe_frame_characters")
-@patch("youcut.thumbnail_generator._download_image")
-@patch("youcut.thumbnail_generator.openai.OpenAI")
-def test_generate_uses_frame_description_when_clip_path_provided(
-    mock_openai_cls, mock_download, mock_describe, mock_resize, tmp_path
-):
-    mock_client = MagicMock()
-    mock_openai_cls.return_value = mock_client
-    mock_client.images.generate.return_value = _mock_openai_response()
-    mock_describe.return_value = "Homem de terno azul, cabelos grisalhos"
-
-    fake_clip = tmp_path / "clip.mp4"
-    fake_clip.write_bytes(b"fake")
-
-    generate_thumbnail(_make_clip(), "", tmp_path, 1, _API_KEY, clip_path=fake_clip)
-
-    mock_describe.assert_called_once()
-    prompt = mock_client.images.generate.call_args.kwargs["prompt"]
-    assert "Homem de terno azul" in prompt
-
-
-@patch("youcut.thumbnail_generator._resize_to_youtube_format")
-@patch("youcut.thumbnail_generator._download_image")
-@patch("youcut.thumbnail_generator.openai.OpenAI")
-def test_generate_skips_frame_extraction_when_clip_path_missing(mock_openai_cls, mock_download, mock_resize, tmp_path):
-    mock_client = MagicMock()
-    mock_openai_cls.return_value = mock_client
-    mock_client.images.generate.return_value = _mock_openai_response()
-
-    generate_thumbnail(_make_clip(), "", tmp_path, 1, _API_KEY, clip_path=None)
-
-    mock_client.images.generate.assert_called_once()
-
-
-@patch("youcut.thumbnail_generator._resize_to_youtube_format")
-@patch("youcut.thumbnail_generator.httpx.get")
-@patch("youcut.thumbnail_generator.openai.OpenAI")
-def test_image_downloaded_and_saved(mock_openai_cls, mock_httpx_get, mock_resize, tmp_path):
-    mock_client = MagicMock()
-    mock_openai_cls.return_value = mock_client
-    mock_client.images.generate.return_value = _mock_openai_response()
-    mock_httpx_get.side_effect = _make_httpx_side_effect()
-
-    result = generate_thumbnail(_make_clip(), "", tmp_path, 3, _API_KEY)
-
-    expected = tmp_path / "thumbnails" / "clip_03.png"
-    assert result == expected
-    assert expected.exists()
-    assert expected.read_bytes() == _FAKE_PNG
-    mock_httpx_get.assert_called_once_with(_IMAGE_URL, follow_redirects=True, timeout=30.0)
-
-
-@patch("youcut.thumbnail_generator._resize_to_youtube_format")
-@patch("youcut.thumbnail_generator.httpx.get")
-@patch("youcut.thumbnail_generator.openai.OpenAI")
-def test_regenerate_calls_generate_thumbnail(mock_openai_cls, mock_httpx_get, mock_resize, tmp_path):
-    mock_client = MagicMock()
-    mock_openai_cls.return_value = mock_client
-    mock_client.images.generate.return_value = _mock_openai_response()
-    mock_httpx_get.side_effect = _make_httpx_side_effect()
-
-    clip = _make_clip()
-    expected_thumb = tmp_path / "thumbnails" / "clip_02.png"
-    clip_record = ClipRecord(
-        title="Clip 2",
-        start_time=120.0,
-        end_time=420.0,
-        clip_path=tmp_path / "clip_02.mp4",
-        thumbnail_path=expected_thumb,
-        approved=True,
-    )
-
-    result = regenerate_thumbnail(clip, clip_record, _API_KEY)
-
-    mock_client.images.generate.assert_called_once()
-    assert result == expected_thumb
-    assert expected_thumb.exists()
-
-
-@patch("youcut.thumbnail_generator._download_image")
-@patch("youcut.thumbnail_generator.openai.OpenAI")
-def test_authentication_error_raises_runtime_error(mock_openai_cls, mock_download, tmp_path):
-    mock_client = MagicMock()
-    mock_openai_cls.return_value = mock_client
-    req = httpx.Request("POST", "https://api.openai.com/v1/images/generations")
-    response = httpx.Response(401, request=req, content=b"unauthorized")
-    mock_client.images.generate.side_effect = openai.AuthenticationError(
-        "invalid api key", response=response, body=None
-    )
-
-    with pytest.raises(RuntimeError, match="Invalid OpenAI API key"):
-        generate_thumbnail(_make_clip(), "", tmp_path, 1, _API_KEY)
-
-
-@patch("youcut.thumbnail_generator._download_image")
-@patch("youcut.thumbnail_generator.openai.OpenAI")
-def test_rate_limit_error_raises_runtime_error(mock_openai_cls, mock_download, tmp_path):
-    mock_client = MagicMock()
-    mock_openai_cls.return_value = mock_client
-    req = httpx.Request("POST", "https://api.openai.com/v1/images/generations")
-    response = httpx.Response(429, request=req, content=b"rate limit")
-    mock_client.images.generate.side_effect = openai.RateLimitError(
-        "rate limit", response=response, body=None
-    )
-
-    with pytest.raises(RuntimeError, match="rate limit"):
-        generate_thumbnail(_make_clip(), "", tmp_path, 1, _API_KEY)
-
-
-@patch("youcut.thumbnail_generator._resize_to_youtube_format")
-@patch("youcut.thumbnail_generator._download_image")
-@patch("youcut.thumbnail_generator.openai.OpenAI")
-def test_thumbnails_dir_created_automatically(mock_openai_cls, mock_download, mock_resize, tmp_path):
-    mock_client = MagicMock()
-    mock_openai_cls.return_value = mock_client
-    mock_client.images.generate.return_value = _mock_openai_response()
-
-    output_dir = tmp_path / "video_stem"
-    assert not (output_dir / "thumbnails").exists()
-
-    generate_thumbnail(_make_clip(), "", output_dir, 1, _API_KEY)
-
-    assert (output_dir / "thumbnails").exists()
-
-
-# ---------------------------------------------------------------------------
-# _build_prompt() — Flow Podcast style
-# ---------------------------------------------------------------------------
-
-def test_build_prompt_contains_flow_podcast_style():
-    clip = _make_clip()
-    prompt = _build_prompt(clip, "")
-    assert "Flow Podcast" in prompt
-    assert "close-up" in prompt
-    assert "bold" in prompt or "tipografia" in prompt
-    assert "vibrantes" in prompt or "contraste" in prompt
-    assert "gradiente" in prompt or "fundo simplificado" in prompt
-
-
-def test_build_prompt_contains_thumbnail_idea_and_face_context():
-    clip = _make_clip()
-    prompt = _build_prompt(clip, "Homem de terno preto, cabelo grisalho")
-    assert clip.thumbnail_idea in prompt
-    assert "Homem de terno preto" in prompt
-
-
-def test_build_prompt_no_face_context():
-    clip = _make_clip()
-    prompt = _build_prompt(clip, "")
-    assert "características" not in prompt
-
-
-# ---------------------------------------------------------------------------
-# _select_best_face_frame() — intelligent frame selection
-# ---------------------------------------------------------------------------
-
-_FAKE_PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 100
+def _make_pil_png(width: int = 640, height: int = 480) -> bytes:
+    img = Image.new("RGB", (width, height), color=(100, 150, 200))
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
 
 
 def _make_mediapipe_detection(score: float, xmin: float, ymin: float, width: float, height: float):
@@ -270,6 +50,175 @@ def _make_mediapipe_detection(score: float, xmin: float, ymin: float, width: flo
     return det
 
 
+def _make_cv2_mock():
+    cv2 = MagicMock()
+    cv2.COLOR_BGR2RGB = 4
+    cv2.IMREAD_COLOR = 1
+    fake_frame = MagicMock()
+    fake_frame.shape = (720, 1280, 3)
+    cv2.imdecode.return_value = fake_frame
+    cv2.cvtColor.return_value = fake_frame
+    return cv2
+
+
+def _make_numpy_mock(png_bytes: bytes):
+    np = MagicMock()
+    np.frombuffer.return_value = MagicMock()
+    np.uint8 = MagicMock()
+    return np
+
+
+def _import_raising_for_mediapipe(name, *args, **kwargs):
+    if name == "mediapipe":
+        raise ImportError("No module named 'mediapipe'")
+    return __import__(name, *args, **kwargs)
+
+
+# ---------------------------------------------------------------------------
+# generate_thumbnail() — assinatura nova (sem OpenAI)
+# ---------------------------------------------------------------------------
+
+@patch("youcut.thumbnail_generator._resize_to_youtube_format")
+@patch("youcut.thumbnail_generator._compose_text_overlay")
+@patch("youcut.thumbnail_generator._apply_frame_processing")
+@patch("youcut.thumbnail_generator._select_best_face_frame")
+def test_generate_thumbnail_returns_correct_path(
+    mock_select, mock_process, mock_compose, mock_resize, tmp_path
+):
+    png_bytes = _make_pil_png()
+    mock_select.return_value = png_bytes
+    pil_img = Image.new("RGB", (640, 480), color=(50, 100, 150))
+    mock_process.return_value = pil_img
+    mock_compose.return_value = pil_img
+
+    clip = _make_clip()
+    fake_mp4 = tmp_path / "clip.mp4"
+    fake_mp4.write_bytes(b"fake")
+
+    result = generate_thumbnail(clip, tmp_path, clip_index=3, clip_path=fake_mp4)
+
+    expected = tmp_path / "thumbnails" / "clip_03.png"
+    assert result == expected
+
+
+@patch("youcut.thumbnail_generator._resize_to_youtube_format")
+@patch("youcut.thumbnail_generator._compose_text_overlay")
+@patch("youcut.thumbnail_generator._apply_frame_processing")
+@patch("youcut.thumbnail_generator._select_best_face_frame")
+def test_generate_thumbnail_creates_thumbnails_dir(
+    mock_select, mock_process, mock_compose, mock_resize, tmp_path
+):
+    png_bytes = _make_pil_png()
+    mock_select.return_value = png_bytes
+    pil_img = Image.new("RGB", (640, 480))
+    mock_process.return_value = pil_img
+    mock_compose.return_value = pil_img
+
+    clip = _make_clip()
+    output_dir = tmp_path / "video_stem"
+    fake_mp4 = output_dir / "clip.mp4"
+    fake_mp4.parent.mkdir(parents=True, exist_ok=True)
+    fake_mp4.write_bytes(b"fake")
+
+    assert not (output_dir / "thumbnails").exists()
+    generate_thumbnail(clip, output_dir, clip_index=1, clip_path=fake_mp4)
+    assert (output_dir / "thumbnails").exists()
+
+
+@patch("youcut.thumbnail_generator._resize_to_youtube_format")
+@patch("youcut.thumbnail_generator._compose_text_overlay")
+@patch("youcut.thumbnail_generator._apply_frame_processing")
+@patch("youcut.thumbnail_generator._select_best_face_frame")
+def test_generate_thumbnail_calls_pipeline_in_order(
+    mock_select, mock_process, mock_compose, mock_resize, tmp_path
+):
+    call_order = []
+
+    png_bytes = _make_pil_png()
+    pil_img = Image.new("RGB", (640, 480))
+
+    mock_select.side_effect = lambda *a, **k: (call_order.append("select"), png_bytes)[1]
+    mock_process.side_effect = lambda *a, **k: (call_order.append("process"), pil_img)[1]
+    mock_compose.side_effect = lambda *a, **k: (call_order.append("compose"), pil_img)[1]
+    mock_resize.side_effect = lambda *a, **k: call_order.append("resize")
+
+    clip = _make_clip()
+    fake_mp4 = tmp_path / "clip.mp4"
+    fake_mp4.write_bytes(b"fake")
+
+    generate_thumbnail(clip, tmp_path, clip_index=0, clip_path=fake_mp4)
+
+    assert call_order == ["select", "process", "compose", "resize"]
+
+
+def test_generate_thumbnail_raises_when_clip_path_missing(tmp_path):
+    clip = _make_clip()
+    with pytest.raises((ValueError, Exception)):
+        generate_thumbnail(clip, tmp_path, clip_index=0, clip_path=None)
+
+
+# ---------------------------------------------------------------------------
+# _apply_frame_processing() — Pillow fallback (sem MediaPipe/cv2)
+# ---------------------------------------------------------------------------
+
+def test_apply_frame_processing_returns_pil_image():
+    frame_bytes = _make_pil_png(640, 480)
+    result = _apply_frame_processing(frame_bytes)
+    assert isinstance(result, Image.Image)
+
+
+def test_apply_frame_processing_preserves_dimensions():
+    frame_bytes = _make_pil_png(800, 600)
+    result = _apply_frame_processing(frame_bytes)
+    assert result.size == (800, 600)
+
+
+def test_apply_frame_processing_returns_rgb():
+    frame_bytes = _make_pil_png(320, 240)
+    result = _apply_frame_processing(frame_bytes)
+    assert result.mode == "RGB"
+
+
+# ---------------------------------------------------------------------------
+# _compose_text_overlay()
+# ---------------------------------------------------------------------------
+
+def test_compose_text_overlay_returns_pil_image():
+    img = Image.new("RGB", (1280, 720), color=(50, 100, 150))
+    result = _compose_text_overlay(img, "Título do Episódio")
+    assert isinstance(result, Image.Image)
+
+
+def test_compose_text_overlay_preserves_dimensions():
+    img = Image.new("RGB", (1280, 720))
+    result = _compose_text_overlay(img, "Momento Incrível")
+    assert result.size == (1280, 720)
+
+
+def test_compose_text_overlay_empty_title_does_not_raise():
+    img = Image.new("RGB", (1280, 720))
+    result = _compose_text_overlay(img, "")
+    assert result.size == (1280, 720)
+
+
+def test_compose_text_overlay_long_title_does_not_raise():
+    img = Image.new("RGB", (1280, 720))
+    long_title = "Uma frase muito longa que tem muitas palavras e não deve quebrar tudo de forma alguma"
+    result = _compose_text_overlay(img, long_title)
+    assert result.size == (1280, 720)
+
+
+def test_compose_text_overlay_does_not_modify_original():
+    img = Image.new("RGB", (1280, 720), color=(255, 0, 0))
+    original_pixel = img.getpixel((0, 0))
+    _compose_text_overlay(img, "Título")
+    assert img.getpixel((0, 0)) == original_pixel
+
+
+# ---------------------------------------------------------------------------
+# _select_best_face_frame() — frame selection logic
+# ---------------------------------------------------------------------------
+
 @patch("youcut.thumbnail_generator._extract_frame")
 @patch("youcut.thumbnail_generator._extract_frame_at")
 @patch("youcut.thumbnail_generator._get_video_duration")
@@ -280,8 +229,6 @@ def test_select_best_face_frame_returns_highest_score_frame(
     fake_mp = MagicMock()
     detector_instance = MagicMock()
 
-    # Frame at index 0: score 0 (no face)
-    # Frame at index 5: score high (good face, centered)
     def make_result(detections):
         r = MagicMock()
         r.detections = detections
@@ -295,7 +242,6 @@ def test_select_best_face_frame_returns_highest_score_frame(
 
     def process_side_effect(rgb):
         call_count[0] += 1
-        # 5th call returns a good detection
         if call_count[0] == 5:
             return good_result
         return bad_result
@@ -343,20 +289,8 @@ def test_select_best_face_frame_falls_back_when_no_face_detected(
 def test_select_best_face_frame_falls_back_when_mediapipe_not_installed(
     mock_extract_fallback, tmp_path
 ):
-    import sys
     mock_extract_fallback.return_value = b"fallback_no_mp"
 
-    modules_without_mediapipe = {k: v for k, v in sys.modules.items()}
-    modules_without_mediapipe.pop("mediapipe", None)
-
-    with patch.dict(sys.modules, {"mediapipe": None}):
-        try:
-            result = _select_best_face_frame(tmp_path / "clip.mp4")
-        except Exception:
-            # If mediapipe module not in sys.modules at all, patch import differently
-            pass
-
-    # Test via ImportError side effect
     with patch("builtins.__import__", side_effect=_import_raising_for_mediapipe):
         result = _select_best_face_frame(tmp_path / "clip.mp4")
 
@@ -364,38 +298,11 @@ def test_select_best_face_frame_falls_back_when_mediapipe_not_installed(
     mock_extract_fallback.assert_called()
 
 
-def _import_raising_for_mediapipe(name, *args, **kwargs):
-    if name == "mediapipe":
-        raise ImportError("No module named 'mediapipe'")
-    return __import__(name, *args, **kwargs)
-
-
-def _make_cv2_mock():
-    cv2 = MagicMock()
-    cv2.COLOR_BGR2RGB = 4
-    cv2.IMREAD_COLOR = 1
-    fake_frame = MagicMock()
-    fake_frame.shape = (720, 1280, 3)
-    cv2.imdecode.return_value = fake_frame
-    cv2.cvtColor.return_value = fake_frame
-    return cv2
-
-
-def _make_numpy_mock(png_bytes: bytes):
-    np = MagicMock()
-    np.frombuffer.return_value = MagicMock()
-    np.uint8 = MagicMock()
-    return np
-
-
 # ---------------------------------------------------------------------------
 # _resize_to_youtube_format() — 1280x720 output
 # ---------------------------------------------------------------------------
 
 def test_resize_to_youtube_format_produces_correct_dimensions(tmp_path):
-    from PIL import Image
-
-    # Create a fake 1792x1024 image (DALL-E output size)
     img = Image.new("RGB", (1792, 1024), color=(255, 0, 0))
     img_path = tmp_path / "thumb.png"
     img.save(img_path, format="PNG")
@@ -407,8 +314,6 @@ def test_resize_to_youtube_format_produces_correct_dimensions(tmp_path):
 
 
 def test_resize_to_youtube_format_preserves_png_format(tmp_path):
-    from PIL import Image
-
     img = Image.new("RGB", (800, 600), color=(0, 255, 0))
     img_path = tmp_path / "thumb.png"
     img.save(img_path, format="PNG")
@@ -417,16 +322,3 @@ def test_resize_to_youtube_format_preserves_png_format(tmp_path):
 
     with Image.open(img_path) as result:
         assert result.format == "PNG"
-
-
-@patch("youcut.thumbnail_generator._resize_to_youtube_format")
-@patch("youcut.thumbnail_generator._download_image")
-@patch("youcut.thumbnail_generator.openai.OpenAI")
-def test_generate_thumbnail_resizes_after_download(mock_openai_cls, mock_download, mock_resize, tmp_path):
-    mock_client = MagicMock()
-    mock_openai_cls.return_value = mock_client
-    mock_client.images.generate.return_value = _mock_openai_response()
-
-    generate_thumbnail(_make_clip(), "", tmp_path, 1, _API_KEY)
-
-    mock_resize.assert_called_once()

@@ -865,21 +865,18 @@ def run_flow_a(
         progress.update(task_cut, description="[green]Clipes cortados[/green]")
 
         thumbnail_paths: list[Path | None] = []
-        if config.openai_api_key:
-            output_dir = config.output_dir / video_path.stem
-            task_th = progress.add_task("Gerando thumbnails (DALL-E 3)...", total=len(viral_clips))
-            for i, clip in enumerate(viral_clips):
-                try:
-                    clip_path_for_thumb = clip_paths[i] if i < len(clip_paths) else None
-                    thumb = generate_thumbnail(clip, "", output_dir, i, config.openai_api_key, clip_path=clip_path_for_thumb)
-                    thumbnail_paths.append(thumb)
-                except Exception as e:
-                    logger.warning("Falha ao gerar thumbnail %d: %s", i + 1, e)
-                    thumbnail_paths.append(None)
-                progress.advance(task_th)
-            progress.update(task_th, description="[green]Thumbnails geradas[/green]")
-        else:
-            thumbnail_paths = [None] * len(viral_clips)
+        output_dir = config.output_dir / video_path.stem
+        task_th = progress.add_task("Gerando thumbnails...", total=len(viral_clips))
+        for i, clip in enumerate(viral_clips):
+            try:
+                clip_path_for_thumb = clip_paths[i] if i < len(clip_paths) else None
+                thumb = generate_thumbnail(clip, output_dir, i, clip_path=clip_path_for_thumb)
+                thumbnail_paths.append(thumb)
+            except Exception as e:
+                logger.warning("Falha ao gerar thumbnail %d: %s", i + 1, e)
+                thumbnail_paths.append(None)
+            progress.advance(task_th)
+        progress.update(task_th, description="[green]Thumbnails geradas[/green]")
 
     clip_records: list[ClipRecord] = []
     for i, (clip, clip_path) in enumerate(zip(viral_clips, clip_paths)):
