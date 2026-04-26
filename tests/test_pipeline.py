@@ -127,7 +127,7 @@ class TestPipelineIntegration:
         assert transcription.segments, "Real Whisper transcription should contain segments"
         assert clip.title == "Teste de Clipe"
         assert clip_path.exists()
-        assert clip_path.name == "clip_01.mp4"
+        assert clip_path.stem.startswith("clip_01")
         assert clip_path.stat().st_size > 0
         assert txt_path.exists()
         assert txt_path.name == "clip_01.txt"

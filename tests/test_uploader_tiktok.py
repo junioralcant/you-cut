@@ -106,61 +106,42 @@ def _status_processing_response() -> tuple[int, dict]:
 
 
 class TestUploadSuccess:
-    def test_returns_success_with_tiktok_url(self, token_dir, video_file, metadata):
-        responses = [
-            _init_response(),
-            _upload_response(),
-            _status_complete_response(),
-        ]
+    def test_returns_pending_after_successful_chunk_upload(self, token_dir, video_file, metadata):
+        responses = [_init_response(), _upload_response()]
         transport = _sequential_transport(responses)
         uploader = _make_uploader(token_dir, transport)
 
         result = uploader.upload(video_file, metadata, clip_index=1)
 
-        assert result.status == "success"
-        assert result.url == f"https://www.tiktok.com/video/{_VIDEO_ID}"
+        assert result.status == "pending"
         assert result.platform == "tiktok"
         assert result.clip_index == 1
-        assert result.error is None
-
-    def test_success_url_is_none_when_post_id_absent(self, token_dir, video_file, metadata):
-        status_no_id = (
-            200,
-            {
-                "data": {
-                    "status": "PUBLISH_COMPLETE",
-                    "publish_id": _PUBLISH_ID,
-                    "publicaly_available_post_id": [],
-                },
-                "error": {"code": "ok", "message": ""},
-            },
-        )
-        responses = [_init_response(), _upload_response(), status_no_id]
-        transport = _sequential_transport(responses)
-        uploader = _make_uploader(token_dir, transport)
-
-        result = uploader.upload(video_file, metadata, clip_index=2)
-
-        assert result.status == "success"
         assert result.url is None
+        assert result.error is not None
+        assert "rascunho" in result.error.lower() or "draft" in result.error.lower()
 
 
-class TestPollingProcessingThenComplete:
-    def test_polls_until_publish_complete(self, token_dir, video_file, metadata):
-        responses = [
-            _init_response(),
-            _upload_response(),
-            _status_processing_response(),  # first poll: still processing
-            _status_complete_response(),    # second poll: done
-        ]
-        transport = _sequential_transport(responses)
-        uploader = _make_uploader(token_dir, transport, polling_interval=0.0)
+class TestPollingSkipped:
+    def test_no_status_request_after_upload(self, token_dir, video_file, metadata):
+        """After chunks upload successfully, no polling request should be made."""
+        status_calls: list[str] = []
 
-        with patch("youcut.uploader.tiktok.time.sleep"):
-            result = uploader.upload(video_file, metadata, clip_index=3)
+        def handler(request: httpx.Request) -> httpx.Response:
+            url = str(request.url)
+            if "status" in url:
+                status_calls.append(url)
+            if "init" in url:
+                return httpx.Response(200, json={"data": {"publish_id": _PUBLISH_ID, "upload_url": "https://fake.upload/"}, "error": {"code": "ok", "message": ""}})
+            if "fake.upload" in url:
+                return httpx.Response(200, json={"data": {}})
+            return httpx.Response(404, text="not found")
 
-        assert result.status == "success"
-        assert result.url == f"https://www.tiktok.com/video/{_VIDEO_ID}"
+        transport = httpx.MockTransport(handler)
+        uploader = _make_uploader(token_dir, transport)
+        result = uploader.upload(video_file, metadata, clip_index=3)
+
+        assert result.status == "pending"
+        assert status_calls == [], "Status endpoint should not be called"
 
 
 class TestInitError:
@@ -219,51 +200,19 @@ class TestUploadChunkError:
         assert "403" in result.error
 
 
-class TestPollingRateLimit:
-    def test_sleep_is_called_between_poll_attempts(self, token_dir, video_file, metadata):
-        """Verify that time.sleep is called between polling requests."""
-        responses = [
-            _init_response(),
-            _upload_response(),
-            _status_processing_response(),
-            _status_complete_response(),
-        ]
+class TestPendingMessageContent:
+    def test_pending_error_message_mentions_draft(self, token_dir, video_file, metadata):
+        """The pending result must guide the user to open the TikTok app."""
+        responses = [_init_response(), _upload_response()]
         transport = _sequential_transport(responses)
-        uploader = _make_uploader(token_dir, transport, polling_interval=10.0)
+        uploader = _make_uploader(token_dir, transport)
 
-        with patch("youcut.uploader.tiktok.time.sleep") as mock_sleep:
-            result = uploader.upload(video_file, metadata, clip_index=8)
-
-        assert result.status == "success"
-        # sleep called once between attempt 0→1 (first attempt has no sleep)
-        mock_sleep.assert_called_once_with(10.0)
-
-    def test_polling_max_retries_respected(self, token_dir, video_file, metadata):
-        """Verify that polling stops after max retries and returns failed."""
-        # Always return processing status — never completes
-        responses = [_init_response(), _upload_response()] + [
-            _status_processing_response() for _ in range(3)
-        ]
-        transport = _sequential_transport(responses)
-        uploader = _make_uploader(token_dir, transport, polling_interval=0.0, polling_max_retries=3)
-
-        with patch("youcut.uploader.tiktok.time.sleep"):
-            result = uploader.upload(video_file, metadata, clip_index=9)
+        result = uploader.upload(video_file, metadata, clip_index=8)
 
         assert result.status == "pending"
-        assert "inbox" in result.error.lower() or "processing" in result.error.lower()
-
-    def test_no_sleep_on_first_poll_attempt(self, token_dir, video_file, metadata):
-        """First polling attempt must not sleep (no wasted time before first check)."""
-        responses = [_init_response(), _upload_response(), _status_complete_response()]
-        transport = _sequential_transport(responses)
-        uploader = _make_uploader(token_dir, transport, polling_interval=10.0)
-
-        with patch("youcut.uploader.tiktok.time.sleep") as mock_sleep:
-            result = uploader.upload(video_file, metadata, clip_index=10)
-
-        assert result.status == "success"
-        mock_sleep.assert_not_called()
+        assert result.error is not None
+        msg = result.error.lower()
+        assert "rascunho" in msg or "draft" in msg or "app" in msg
 
 
 class TestChunkSizeLimit:
@@ -318,7 +267,6 @@ class TestChunkSizeLimit:
                 )
             if "fake.upload" in url and request.method == "PUT":
                 content_range = request.headers.get("content-range", "")
-                # parse "bytes start-end/total"
                 _, range_part = content_range.split(" ", 1)
                 range_def, _ = range_part.split("/", 1)
                 start, end = range_def.split("-")
@@ -326,25 +274,14 @@ class TestChunkSizeLimit:
                 assert chunk_len <= chunk_size, f"Chunk too large: {chunk_len} > {chunk_size}"
                 received_chunks.append(chunk_len)
                 return httpx.Response(200, json={"data": {}})
-            if "status" in url:
-                return httpx.Response(
-                    200,
-                    json={
-                        "data": {
-                            "status": "PUBLISH_COMPLETE",
-                            "publicaly_available_post_id": [_VIDEO_ID],
-                        },
-                        "error": {"code": "ok", "message": ""},
-                    },
-                )
             return httpx.Response(404, text="not found")
 
         transport = httpx.MockTransport(handler)
-        uploader = _make_uploader(token_dir, transport, polling_interval=0.0)
+        uploader = _make_uploader(token_dir, transport)
 
         result = uploader.upload(video_path, metadata, clip_index=11)
 
-        assert result.status == "success"
+        assert result.status == "pending"
         assert len(received_chunks) == expected_chunks
         for chunk_len in received_chunks:
             assert chunk_len <= chunk_size
@@ -354,7 +291,7 @@ class TestPrivateVideoWarning:
     def test_warning_logged_on_every_upload(self, token_dir, video_file, metadata, caplog):
         import logging
 
-        responses = [_init_response(), _upload_response(), _status_complete_response()]
+        responses = [_init_response(), _upload_response()]
         transport = _sequential_transport(responses)
         uploader = _make_uploader(token_dir, transport)
 
@@ -601,23 +538,15 @@ class TestPkceHelpers:
 
 
 class TestPollingPublishFailed:
-    def test_tiktok_failed_status_returns_failed_result(self, token_dir, video_file, metadata):
-        status_failed = (
-            200,
-            {
-                "data": {
-                    "status": "FAILED",
-                    "publish_id": _PUBLISH_ID,
-                    "fail_reason": "VIDEO_TOO_SHORT",
-                },
-                "error": {"code": "ok", "message": ""},
-            },
-        )
-        responses = [_init_response(), _upload_response(), status_failed]
+    def test_chunk_upload_failure_returns_failed(self, token_dir, video_file, metadata):
+        responses = [
+            _init_response(),
+            (500, {"error": {"code": "internal_error", "message": "Upload failed"}}),
+        ]
         transport = _sequential_transport(responses)
         uploader = _make_uploader(token_dir, transport)
 
         result = uploader.upload(video_file, metadata, clip_index=14)
 
         assert result.status == "failed"
-        assert "VIDEO_TOO_SHORT" in result.error
+        assert result.error is not None

@@ -3,6 +3,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from youcut.caption_burner import CaptionBurner
 from youcut.config import PipelineConfig
 from youcut.models import ViralClip
 
@@ -50,6 +51,9 @@ def cut_clip(
         stderr = e.stderr.decode("utf-8", errors="replace")
         logger.error("FFmpeg falhou (código %d): %s", e.returncode, stderr)
         raise
+
+    if clip.cut_mode == "social":
+        output_path = CaptionBurner().burn(output_path, style="word")
 
     return output_path
 

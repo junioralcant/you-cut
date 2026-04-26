@@ -83,16 +83,22 @@ class YouTubeUploader(Uploader):
         metadata: ClipMetadata,
         clip_index: int = 0,
         privacy: str = "public",
+        thumbnail_path: Path | None = None,
+        cut_mode: str = "youtube",
     ) -> UploadResult:
         if self._credentials is None:
             self.authenticate()
 
         meta = apply_platform_limits(metadata, _PLATFORM)
 
+        description = meta.caption
+        if cut_mode == "social":
+            description = f"{description}\n\n#Shorts"
+
         body = {
             "snippet": {
                 "title": meta.title,
-                "description": meta.caption,
+                "description": description,
                 "tags": meta.hashtags,
                 "categoryId": "22",  # People & Blogs
             },
@@ -124,11 +130,30 @@ class YouTubeUploader(Uploader):
                 video_id = response["id"]
                 url = f"https://youtu.be/{video_id}"
                 logger.info("YouTube upload succeeded: %s", url)
+
+                if thumbnail_path is not None:
+                    # thumbnails.set costs 50 quota units per call; limit is 10 uploads/channel/24h via API
+                    try:
+                        thumb_media = MediaFileUpload(
+                            str(thumbnail_path),
+                            mimetype="image/jpeg",
+                            resumable=False,
+                        )
+                        youtube.thumbnails().set(
+                            videoId=video_id,
+                            media_body=thumb_media,
+                            media_mime_type="image/jpeg",
+                        ).execute()
+                        logger.info("YouTube thumbnail enviada: video_id=%s", video_id)
+                    except Exception as exc:
+                        logger.warning("Falha ao enviar thumbnail video_id=%s: %s", video_id, exc)
+
                 return UploadResult(
                     platform=_PLATFORM,
                     clip_index=clip_index,
                     status="success",
                     url=url,
+                    video_id=video_id,
                 )
 
             except HttpError as exc:

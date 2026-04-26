@@ -567,6 +567,8 @@ def _publish_clips_with_status(
     records: list[ClipRecord],
     platforms: list[str],
     token_dir: Path,
+    session: SessionData | None = None,
+    cut_mode: str = "youtube",
 ) -> None:
     client_secrets_file = os.getenv("YOUTUBE_CLIENT_SECRETS_FILE")
     uploader_map = {
@@ -595,35 +597,45 @@ def _publish_clips_with_status(
                 continue
             if platform in auth_failures:
                 _console.print(f"[red]✗ Clipe {i + 1} — {platform}: falha de autenticação: {auth_failures[platform]}[/red]")
+                record.upload_status[platform] = "failed"
                 continue
             _console.print(f"[dim]Publicando clipe {i + 1}/{len(records)} em {platform}...[/dim]")
             uploader = uploader_map[platform]
             try:
                 metadata = ClipMetadata(
                     title=record.title,
-                    description="",
+                    description=record.title,
                     hashtags=[],
-                    caption="",
+                    caption=record.title,
                 )
-                result = uploader.upload(record.clip_path, metadata, clip_index=i + 1)
+                if platform == "youtube":
+                    result = uploader.upload(
+                        record.clip_path,
+                        metadata,
+                        clip_index=i + 1,
+                        thumbnail_path=record.thumbnail_path,
+                        cut_mode=cut_mode,
+                    )
+                else:
+                    result = uploader.upload(record.clip_path, metadata, clip_index=i + 1)
             except Exception as exc:
                 _console.print(f"[red]✗ Clipe {i + 1} — {platform}: erro inesperado: {exc}[/red]")
                 logger.exception("Upload falhou para clipe %d em %s", i + 1, platform)
+                record.upload_status[platform] = "failed"
                 continue
+
+            record.upload_status[platform] = result.status
+            if platform == "youtube" and result.status == "success":
+                record.youtube_video_id = result.video_id
+                record.youtube_url = result.url
 
             if result.status == "success":
                 _console.print(f"[green]✓ Clipe {i + 1} publicado em {platform}: {result.url}[/green]")
             else:
                 _console.print(f"[red]✗ Clipe {i + 1} falhou em {platform}: {result.error}[/red]")
-                if questionary.confirm("Tentar novamente?", default=False).ask():
-                    try:
-                        result2 = uploader.upload(record.clip_path, metadata, clip_index=i + 1)
-                        if result2.status == "success":
-                            _console.print(f"[green]✓ Clipe {i + 1} publicado em {platform}: {result2.url}[/green]")
-                        else:
-                            _console.print(f"[red]✗ Clipe {i + 1} falhou novamente em {platform}.[/red]")
-                    except Exception as exc2:
-                        _console.print(f"[red]Erro na nova tentativa: {exc2}[/red]")
+
+    if session is not None:
+        save_session(session)
 
 
 def _can_prompt_interactively() -> bool:
@@ -767,19 +779,8 @@ def run_flow_a(
 
     approved = [r for r in clip_records if r.approved]
 
-    selected_upload_platforms = _resolve_upload_platforms(
-        upload=upload,
-        approved_records=approved,
-        default_platforms=platforms if upload and platforms else ["youtube"],
-    )
-    if selected_upload_platforms:
-        _publish_clips_with_status(approved, selected_upload_platforms, _default_token_dir())
-
-    _show_records_table(clip_records)
-
-    session_id = str(uuid.uuid4())
     session = SessionData(
-        session_id=session_id,
+        session_id=str(uuid.uuid4()),
         source_url=source,
         cut_mode=config.cut_mode,
         transcription_cache_path=transcription_cache_path,
@@ -787,6 +788,19 @@ def run_flow_a(
         created_at=datetime.now(),
         output_dir=config.output_dir / video_path.stem,
     )
+
+    selected_upload_platforms = _resolve_upload_platforms(
+        upload=upload,
+        approved_records=approved,
+        default_platforms=platforms if upload and platforms else ["youtube"],
+    )
+    if selected_upload_platforms:
+        _publish_clips_with_status(
+            approved, selected_upload_platforms, _default_token_dir(), session=session
+        )
+
+    _show_records_table(clip_records)
+
     session_path = save_session(session)
     logger.info("Sessão salva: %s", session_path)
     _console.print(f"[green]Sessão salva em {session_path}[/green]")
@@ -936,7 +950,7 @@ def run_flow_b(
     )
     if selected_upload_platforms:
         _publish_clips_with_status(
-            approved, selected_upload_platforms, _default_token_dir()
+            approved, selected_upload_platforms, _default_token_dir(), cut_mode="social"
         )
 
     _show_records_table(records)
@@ -1027,7 +1041,7 @@ def run_flow_c(
     )
     if selected_upload_platforms:
         _publish_clips_with_status(
-            approved, selected_upload_platforms, _default_token_dir()
+            approved, selected_upload_platforms, _default_token_dir(), cut_mode="social"
         )
 
     _show_records_table(clip_records)
@@ -1046,6 +1060,18 @@ def offer_flow_b(
     if not approved_clips:
         _console.print("[yellow]Nenhum clipe aprovado disponível para o Fluxo B.[/yellow]")
         return
+
+    # Gate: Flow B only available after YouTube uploads complete (when applicable)
+    if upload and platforms and "youtube" in platforms:
+        not_uploaded = [c for c in approved_clips if c.upload_status.get("youtube") != "success"]
+        if not_uploaded:
+            _console.print(Panel(
+                f"[yellow]{len(not_uploaded)} clipe(s) ainda não foram publicados no YouTube. "
+                f"O Fluxo B ficará disponível após a conclusão dos uploads.[/yellow]",
+                title="[yellow]Gate Flow B — Aguardando YouTube[/yellow]",
+                border_style="yellow",
+            ))
+            return
 
     timeout_seconds = config.session_timeout_minutes * 60
 
@@ -1289,11 +1315,20 @@ def cuts(
         raise typer.Exit(code=1)
 
     if mode == "youtube":
+        effective_skip_review = skip_review
+        if _can_prompt_interactively():
+            auto_mode = questionary.confirm(
+                "Executar tudo automaticamente? (sem revisão manual)",
+                default=False,
+            ).ask()
+            if auto_mode:
+                effective_skip_review = True
+
         # Fluxo A + oferta de Fluxo B
         session = run_flow_a(
             url,
             config,
-            skip_review=skip_review,
+            skip_review=effective_skip_review,
             upload=upload,
             platforms=selected_platforms,
         )
@@ -1301,7 +1336,7 @@ def cuts(
             offer_flow_b(
                 session=session,
                 config=config,
-                skip_review=skip_review,
+                skip_review=effective_skip_review,
                 upload=upload,
                 platforms=selected_platforms,
             )

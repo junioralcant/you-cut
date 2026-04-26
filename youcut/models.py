@@ -20,6 +20,9 @@ class ClipRecord(BaseModel):
     clip_path: Path
     thumbnail_path: Path | None
     approved: bool = True
+    youtube_video_id: str | None = None
+    youtube_url: str | None = None
+    upload_status: dict[str, str] = {}
 
 
 class SessionData(BaseModel):

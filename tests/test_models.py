@@ -13,6 +13,7 @@ from youcut.models import (
     ViralClip,
     WordTimestamp,
 )
+from youcut.uploader.base import UploadResult
 
 
 def test_viral_clip_creation():
@@ -249,3 +250,115 @@ def test_session_data_rejects_invalid_cut_mode():
             created_at=datetime(2026, 4, 25, 10, 0, 0),
             output_dir=Path("output/sess-x"),
         )
+
+
+def test_clip_record_new_fields_default_values():
+    record = ClipRecord(
+        title="Clip Test",
+        start_time=0.0,
+        end_time=60.0,
+        clip_path=Path("output/clip.mp4"),
+        thumbnail_path=None,
+    )
+    assert record.youtube_video_id is None
+    assert record.youtube_url is None
+    assert record.upload_status == {}
+
+
+def test_clip_record_new_fields_with_values():
+    record = ClipRecord(
+        title="Clip YT",
+        start_time=0.0,
+        end_time=120.0,
+        clip_path=Path("output/clip_yt.mp4"),
+        thumbnail_path=None,
+        youtube_video_id="dQw4w9WgXcQ",
+        youtube_url="https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+        upload_status={"youtube": "success", "tiktok": "failed"},
+    )
+    assert record.youtube_video_id == "dQw4w9WgXcQ"
+    assert record.youtube_url == "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+    assert record.upload_status == {"youtube": "success", "tiktok": "failed"}
+
+
+def test_clip_record_serialization_with_new_fields():
+    record = ClipRecord(
+        title="Clip Serialize",
+        start_time=5.0,
+        end_time=65.0,
+        clip_path=Path("output/clip_s.mp4"),
+        thumbnail_path=None,
+        youtube_video_id="abc123",
+        youtube_url="https://www.youtube.com/watch?v=abc123",
+        upload_status={"youtube": "success"},
+    )
+    data = record.model_dump()
+    restored = ClipRecord(**data)
+    assert restored.youtube_video_id == "abc123"
+    assert restored.youtube_url == "https://www.youtube.com/watch?v=abc123"
+    assert restored.upload_status == {"youtube": "success"}
+
+
+def test_clip_record_json_roundtrip_new_fields():
+    record = ClipRecord(
+        title="Clip JSON",
+        start_time=10.0,
+        end_time=70.0,
+        clip_path=Path("output/clip_j.mp4"),
+        thumbnail_path=None,
+        youtube_video_id="vid999",
+        youtube_url="https://www.youtube.com/watch?v=vid999",
+        upload_status={"youtube": "success", "instagram": "failed"},
+    )
+    json_str = record.model_dump_json()
+    restored = ClipRecord.model_validate_json(json_str)
+    assert restored.youtube_video_id == "vid999"
+    assert restored.youtube_url == "https://www.youtube.com/watch?v=vid999"
+    assert restored.upload_status == {"youtube": "success", "instagram": "failed"}
+
+
+def test_upload_result_video_id_default_none():
+    result = UploadResult(
+        platform="youtube",
+        clip_index=0,
+        status="success",
+    )
+    assert result.video_id is None
+
+
+def test_upload_result_with_video_id():
+    result = UploadResult(
+        platform="youtube",
+        clip_index=0,
+        status="success",
+        video_id="dQw4w9WgXcQ",
+    )
+    assert result.video_id == "dQw4w9WgXcQ"
+
+
+def test_upload_result_serialization_with_video_id():
+    result = UploadResult(
+        platform="youtube",
+        clip_index=1,
+        status="success",
+        url="https://www.youtube.com/watch?v=abc",
+        video_id="abc",
+    )
+    data = result.model_dump()
+    restored = UploadResult(**data)
+    assert restored.video_id == "abc"
+    assert restored.platform == "youtube"
+
+
+def test_upload_result_json_roundtrip_video_id():
+    result = UploadResult(
+        platform="youtube",
+        clip_index=2,
+        status="failed",
+        error="quota exceeded",
+        video_id=None,
+    )
+    json_str = result.model_dump_json()
+    restored = UploadResult.model_validate_json(json_str)
+    assert restored.video_id is None
+    assert restored.error == "quota exceeded"

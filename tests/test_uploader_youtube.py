@@ -364,3 +364,176 @@ class TestAuthenticateNoToken:
 
         with pytest.raises(RuntimeError, match="client_secrets_file"):
             uploader.authenticate()
+
+
+# ---------------------------------------------------------------------------
+# upload() — video_id in UploadResult
+# ---------------------------------------------------------------------------
+
+class TestUploadVideoId:
+    @patch("youcut.uploader.youtube.build")
+    def test_video_id_populated_in_result(self, mock_build, tmp_path):
+        uploader = _make_uploader(tmp_path)
+
+        mock_youtube = MagicMock()
+        mock_build.return_value = mock_youtube
+        mock_request = MagicMock()
+        mock_youtube.videos.return_value.insert.return_value = mock_request
+        mock_request.next_chunk.return_value = (None, {"id": "vid123"})
+
+        video = tmp_path / "clip.mp4"
+        video.write_bytes(b"\x00" * 10)
+
+        result = uploader.upload(video, _make_metadata())
+
+        assert result.video_id == "vid123"
+        assert result.status == "success"
+
+    @patch("youcut.uploader.youtube.build")
+    def test_video_id_not_none_after_success(self, mock_build, tmp_path):
+        uploader = _make_uploader(tmp_path)
+
+        mock_youtube = MagicMock()
+        mock_build.return_value = mock_youtube
+        mock_request = MagicMock()
+        mock_youtube.videos.return_value.insert.return_value = mock_request
+        mock_request.next_chunk.return_value = (None, {"id": "unique_id_456"})
+
+        video = tmp_path / "clip.mp4"
+        video.write_bytes(b"\x00" * 10)
+
+        result = uploader.upload(video, _make_metadata(), clip_index=2)
+
+        assert result.video_id is not None
+        assert result.video_id == "unique_id_456"
+
+
+# ---------------------------------------------------------------------------
+# upload() — thumbnail upload
+# ---------------------------------------------------------------------------
+
+class TestUploadThumbnail:
+    @patch("youcut.uploader.youtube.build")
+    def test_thumbnail_set_called_with_correct_video_id(self, mock_build, tmp_path):
+        uploader = _make_uploader(tmp_path)
+
+        mock_youtube = MagicMock()
+        mock_build.return_value = mock_youtube
+        mock_request = MagicMock()
+        mock_youtube.videos.return_value.insert.return_value = mock_request
+        mock_request.next_chunk.return_value = (None, {"id": "thumb_vid_99"})
+
+        video = tmp_path / "clip.mp4"
+        video.write_bytes(b"\x00" * 10)
+        thumbnail = tmp_path / "thumb.jpg"
+        thumbnail.write_bytes(b"\xff\xd8\xff")  # minimal JPEG header
+
+        result = uploader.upload(video, _make_metadata(), thumbnail_path=thumbnail)
+
+        mock_youtube.thumbnails.return_value.set.assert_called_once()
+        call_kwargs = mock_youtube.thumbnails.return_value.set.call_args.kwargs
+        assert call_kwargs["videoId"] == "thumb_vid_99"
+        assert result.status == "success"
+        assert result.video_id == "thumb_vid_99"
+
+    @patch("youcut.uploader.youtube.build")
+    def test_thumbnail_not_called_when_path_is_none(self, mock_build, tmp_path):
+        uploader = _make_uploader(tmp_path)
+
+        mock_youtube = MagicMock()
+        mock_build.return_value = mock_youtube
+        mock_request = MagicMock()
+        mock_youtube.videos.return_value.insert.return_value = mock_request
+        mock_request.next_chunk.return_value = (None, {"id": "no_thumb_id"})
+
+        video = tmp_path / "clip.mp4"
+        video.write_bytes(b"\x00" * 10)
+
+        uploader.upload(video, _make_metadata(), thumbnail_path=None)
+
+        mock_youtube.thumbnails.return_value.set.assert_not_called()
+
+    @patch("youcut.uploader.youtube.build")
+    def test_thumbnail_failure_does_not_propagate(self, mock_build, tmp_path):
+        uploader = _make_uploader(tmp_path)
+
+        mock_youtube = MagicMock()
+        mock_build.return_value = mock_youtube
+        mock_request = MagicMock()
+        mock_youtube.videos.return_value.insert.return_value = mock_request
+        mock_request.next_chunk.return_value = (None, {"id": "thumb_fail_id"})
+        mock_youtube.thumbnails.return_value.set.return_value.execute.side_effect = Exception("thumbnail API error")
+
+        video = tmp_path / "clip.mp4"
+        video.write_bytes(b"\x00" * 10)
+        thumbnail = tmp_path / "thumb.jpg"
+        thumbnail.write_bytes(b"\xff\xd8\xff")
+
+        result = uploader.upload(video, _make_metadata(), thumbnail_path=thumbnail)
+
+        assert result.status == "success"
+        assert result.video_id == "thumb_fail_id"
+        assert result.url == "https://youtu.be/thumb_fail_id"
+
+
+# ---------------------------------------------------------------------------
+# upload() — Shorts detection
+# ---------------------------------------------------------------------------
+
+class TestUploadShortsDetection:
+    @patch("youcut.uploader.youtube.build")
+    def test_shorts_injected_when_cut_mode_social(self, mock_build, tmp_path):
+        uploader = _make_uploader(tmp_path)
+
+        mock_youtube = MagicMock()
+        mock_build.return_value = mock_youtube
+        mock_request = MagicMock()
+        mock_youtube.videos.return_value.insert.return_value = mock_request
+        mock_request.next_chunk.return_value = (None, {"id": "shorts_id"})
+
+        video = tmp_path / "clip.mp4"
+        video.write_bytes(b"\x00" * 10)
+
+        uploader.upload(video, _make_metadata(), cut_mode="social")
+
+        insert_call = mock_youtube.videos.return_value.insert
+        body_used = insert_call.call_args.kwargs["body"]
+        assert "#Shorts" in body_used["snippet"]["description"]
+
+    @patch("youcut.uploader.youtube.build")
+    def test_shorts_not_injected_when_cut_mode_youtube(self, mock_build, tmp_path):
+        uploader = _make_uploader(tmp_path)
+
+        mock_youtube = MagicMock()
+        mock_build.return_value = mock_youtube
+        mock_request = MagicMock()
+        mock_youtube.videos.return_value.insert.return_value = mock_request
+        mock_request.next_chunk.return_value = (None, {"id": "yt_id"})
+
+        video = tmp_path / "clip.mp4"
+        video.write_bytes(b"\x00" * 10)
+
+        uploader.upload(video, _make_metadata(), cut_mode="youtube")
+
+        insert_call = mock_youtube.videos.return_value.insert
+        body_used = insert_call.call_args.kwargs["body"]
+        assert "#Shorts" not in body_used["snippet"]["description"]
+
+    @patch("youcut.uploader.youtube.build")
+    def test_shorts_not_injected_by_default(self, mock_build, tmp_path):
+        uploader = _make_uploader(tmp_path)
+
+        mock_youtube = MagicMock()
+        mock_build.return_value = mock_youtube
+        mock_request = MagicMock()
+        mock_youtube.videos.return_value.insert.return_value = mock_request
+        mock_request.next_chunk.return_value = (None, {"id": "default_id"})
+
+        video = tmp_path / "clip.mp4"
+        video.write_bytes(b"\x00" * 10)
+
+        uploader.upload(video, _make_metadata())
+
+        insert_call = mock_youtube.videos.return_value.insert
+        body_used = insert_call.call_args.kwargs["body"]
+        assert "#Shorts" not in body_used["snippet"]["description"]

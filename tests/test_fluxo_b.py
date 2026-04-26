@@ -420,3 +420,119 @@ class TestFlowBHistoryIntegration:
             )
 
         assert len(cut_calls) >= 1
+
+
+# ---------------------------------------------------------------------------
+# Task 6.0 — Gate Flow B: conditional release of short clips
+# ---------------------------------------------------------------------------
+
+class TestGateFlowB:
+    def test_flow_b_blocked_when_youtube_upload_pending(
+        self, social_config, youtube_session, short_clip_path, mock_short_clip
+    ):
+        """offer_flow_b exits without calling run_flow_b when YouTube upload not complete."""
+        run_flow_b_calls = []
+
+        def fake_run_flow_b(**kw):
+            run_flow_b_calls.append(True)
+
+        with patch("youcut.cli.run_flow_b", side_effect=fake_run_flow_b):
+            from youcut.cli import offer_flow_b
+            offer_flow_b(
+                session=youtube_session,
+                config=social_config,
+                skip_review=True,
+                upload=True,
+                platforms=["youtube"],
+            )
+
+        # Gate should block: clips have no upload_status["youtube"] == "success"
+        assert len(run_flow_b_calls) == 0
+
+    def test_flow_b_allowed_when_youtube_upload_successful(
+        self, social_config, youtube_session, short_clip_path, mock_short_clip
+    ):
+        """offer_flow_b proceeds when all approved clips have upload_status['youtube'] == 'success'."""
+        # Mark all clips as successfully uploaded
+        for clip in youtube_session.clips:
+            clip.upload_status["youtube"] = "success"
+
+        run_flow_b_calls = []
+
+        def fake_run_flow_b(session, selected_clips, config, **kw):
+            run_flow_b_calls.append(list(selected_clips))
+
+        with (
+            patch("youcut.cli.run_flow_b", side_effect=fake_run_flow_b),
+            patch("youcut.cli.questionary.confirm", return_value=MagicMock(ask=MagicMock(return_value=False))),
+            patch("youcut.cli.time.sleep"),
+        ):
+            from youcut.cli import offer_flow_b
+            offer_flow_b(
+                session=youtube_session,
+                config=social_config,
+                skip_review=True,
+                upload=True,
+                platforms=["youtube"],
+            )
+
+        # Gate passes: run_flow_b should be called
+        assert len(run_flow_b_calls) == 1
+
+    def test_flow_b_allowed_when_upload_not_requested(
+        self, social_config, youtube_session, short_clip_path, mock_short_clip
+    ):
+        """offer_flow_b proceeds when upload=False (no YouTube uploads required)."""
+        run_flow_b_calls = []
+
+        def fake_run_flow_b(session, selected_clips, config, **kw):
+            run_flow_b_calls.append(list(selected_clips))
+
+        with (
+            patch("youcut.cli.run_flow_b", side_effect=fake_run_flow_b),
+            patch("youcut.cli.questionary.confirm", return_value=MagicMock(ask=MagicMock(return_value=False))),
+            patch("youcut.cli.time.sleep"),
+        ):
+            from youcut.cli import offer_flow_b
+            offer_flow_b(
+                session=youtube_session,
+                config=social_config,
+                skip_review=True,
+                upload=False,
+            )
+
+        # No gate when upload=False
+        assert len(run_flow_b_calls) == 1
+
+    def test_flow_b_blocked_partial_youtube_failure(
+        self, social_config, youtube_session, long_clip_path, tmp_path
+    ):
+        """offer_flow_b blocked when at least one clip has non-success YouTube status."""
+        # Add a second clip, mark only one as uploaded
+        second_clip_path = tmp_path / "clips" / "clip_02.mp4"
+        second_clip_path.parent.mkdir(parents=True, exist_ok=True)
+        second_clip_path.touch()
+
+        clip2 = ClipRecord(
+            title="Second Clip",
+            start_time=700.0,
+            end_time=900.0,
+            clip_path=second_clip_path,
+            thumbnail_path=None,
+            approved=True,
+        )
+        youtube_session.clips[0].upload_status["youtube"] = "success"
+        youtube_session.clips.append(clip2)  # no upload_status set
+
+        run_flow_b_calls = []
+        with patch("youcut.cli.run_flow_b", side_effect=lambda **kw: run_flow_b_calls.append(True)):
+            from youcut.cli import offer_flow_b
+            offer_flow_b(
+                session=youtube_session,
+                config=social_config,
+                skip_review=True,
+                upload=True,
+                platforms=["youtube"],
+            )
+
+        assert len(run_flow_b_calls) == 0

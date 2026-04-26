@@ -508,21 +508,14 @@ class TikTokUploader(Uploader):
                 platform=_PLATFORM, clip_index=clip_index, status="failed", error=error
             )
 
-        status, url, error = self._poll_status(publish_id)
-        if status == "PENDING":
-            logger.warning("TikTok publish_id=%s: %s", publish_id, error)
-            return UploadResult(
-                platform=_PLATFORM, clip_index=clip_index, status="pending", error=error
-            )
-        if status != "PUBLISH_COMPLETE":
-            logger.error(
-                "TikTok publish failed for publish_id=%s: %s", publish_id, error
-            )
-            return UploadResult(
-                platform=_PLATFORM, clip_index=clip_index, status="failed", error=error
-            )
-
-        logger.info("TikTok upload succeeded: %s", url or "(URL not yet available)")
+        logger.info(
+            "TikTok chunks uploaded for publish_id=%s. "
+            "Video sent to your TikTok drafts — open the app to publish.",
+            publish_id,
+        )
         return UploadResult(
-            platform=_PLATFORM, clip_index=clip_index, status="success", url=url
+            platform=_PLATFORM,
+            clip_index=clip_index,
+            status="pending",
+            error="Vídeo enviado para o rascunho do TikTok. Abra o app para publicar.",
         )

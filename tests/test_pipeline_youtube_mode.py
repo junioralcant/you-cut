@@ -201,10 +201,16 @@ class TestFlowAYouTubeClipFormat:
         assert cut_calls[0].cut_mode == "youtube"
 
     def test_no_thumbnail_generated_without_openai_key(
-        self, tmp_path, youtube_config, mock_transcription, mock_viral_clip_youtube, video_path, clip_path
+        self, tmp_path, monkeypatch, mock_transcription, mock_viral_clip_youtube, video_path, clip_path
     ):
         """When openai_api_key is absent, no thumbnails are generated."""
-        assert youtube_config.openai_api_key is None
+        # chdir to tmp_path so pydantic-settings doesn't pick up the project's .env
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        from youcut.config import PipelineConfig
+        config = PipelineConfig(cut_mode="youtube", output_dir=tmp_path / "output")
+        assert config.openai_api_key is None
 
         with (
             patch("youcut.cli.download_video", return_value=video_path),
@@ -217,7 +223,7 @@ class TestFlowAYouTubeClipFormat:
             from youcut.cli import run_flow_a
             run_flow_a(
                 "https://youtube.com/watch?v=test",
-                youtube_config,
+                config,
                 skip_review=True,
                 upload=False,
             )
@@ -314,3 +320,267 @@ class TestFlowAUploadPrompt:
 
         mock_confirm.assert_not_called()
         mock_publish.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Task 5.0 — _publish_clips_with_status: real metadata + persistence
+# ---------------------------------------------------------------------------
+
+class TestPublishClipsWithStatus:
+    def _make_record(self, tmp_path, *, thumbnail: bool = False) -> "ClipRecord":
+        clip = tmp_path / "clip_01.mp4"
+        clip.write_bytes(b"\x00" * 10)
+        thumb = None
+        if thumbnail:
+            thumb = tmp_path / "thumb.jpg"
+            thumb.write_bytes(b"\xff\xd8\xff")
+        return ClipRecord(
+            title="Test Clip",
+            start_time=0.0,
+            end_time=60.0,
+            clip_path=clip,
+            thumbnail_path=thumb,
+        )
+
+    def test_upload_status_set_on_success(self, tmp_path, monkeypatch):
+        """upload_status['youtube'] is set to 'success' after a successful upload."""
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+        record = self._make_record(tmp_path)
+
+        mock_uploader = MagicMock()
+        mock_uploader.upload.return_value = MagicMock(
+            status="success", url="https://youtu.be/abc", video_id="abc", error=None
+        )
+
+        from youcut.cli import _publish_clips_with_status
+        with patch("youcut.cli.YouTubeUploader", return_value=mock_uploader), \
+             patch("youcut.cli.InstagramUploader", return_value=MagicMock()), \
+             patch("youcut.cli.TikTokUploader", return_value=MagicMock()):
+            _publish_clips_with_status([record], ["youtube"], tmp_path / "creds")
+
+        assert record.upload_status["youtube"] == "success"
+
+    def test_youtube_video_id_stored_in_record(self, tmp_path, monkeypatch):
+        """youtube_video_id and youtube_url are stored in ClipRecord after YouTube success."""
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+        record = self._make_record(tmp_path)
+
+        mock_uploader = MagicMock()
+        mock_uploader.upload.return_value = MagicMock(
+            status="success", url="https://youtu.be/vid999", video_id="vid999", error=None
+        )
+
+        from youcut.cli import _publish_clips_with_status
+        with patch("youcut.cli.YouTubeUploader", return_value=mock_uploader), \
+             patch("youcut.cli.InstagramUploader", return_value=MagicMock()), \
+             patch("youcut.cli.TikTokUploader", return_value=MagicMock()):
+            _publish_clips_with_status([record], ["youtube"], tmp_path / "creds")
+
+        assert record.youtube_video_id == "vid999"
+        assert record.youtube_url == "https://youtu.be/vid999"
+
+    def test_thumbnail_path_passed_to_youtube_uploader(self, tmp_path, monkeypatch):
+        """thumbnail_path from ClipRecord is forwarded to YouTubeUploader.upload()."""
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+        record = self._make_record(tmp_path, thumbnail=True)
+
+        mock_uploader = MagicMock()
+        mock_uploader.upload.return_value = MagicMock(
+            status="success", url="https://youtu.be/t1", video_id="t1", error=None
+        )
+
+        from youcut.cli import _publish_clips_with_status
+        with patch("youcut.cli.YouTubeUploader", return_value=mock_uploader), \
+             patch("youcut.cli.InstagramUploader", return_value=MagicMock()), \
+             patch("youcut.cli.TikTokUploader", return_value=MagicMock()):
+            _publish_clips_with_status([record], ["youtube"], tmp_path / "creds")
+
+        call_kwargs = mock_uploader.upload.call_args.kwargs
+        assert call_kwargs.get("thumbnail_path") == record.thumbnail_path
+
+    def test_upload_status_failed_on_upload_error(self, tmp_path, monkeypatch):
+        """upload_status['youtube'] is set to 'failed' when upload returns failed."""
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+        record = self._make_record(tmp_path)
+
+        mock_uploader = MagicMock()
+        mock_uploader.upload.return_value = MagicMock(
+            status="failed", url=None, video_id=None, error="quota exceeded"
+        )
+
+        from youcut.cli import _publish_clips_with_status
+        with patch("youcut.cli.YouTubeUploader", return_value=mock_uploader), \
+             patch("youcut.cli.InstagramUploader", return_value=MagicMock()), \
+             patch("youcut.cli.TikTokUploader", return_value=MagicMock()):
+            _publish_clips_with_status([record], ["youtube"], tmp_path / "creds")
+
+        assert record.upload_status["youtube"] == "failed"
+        assert record.youtube_video_id is None
+
+    def test_session_saved_after_upload(self, tmp_path, monkeypatch):
+        """save_session is called with the session after uploads complete."""
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+        from youcut.models import SessionData
+        from datetime import datetime
+        record = self._make_record(tmp_path)
+        session = SessionData(
+            session_id="sess-1",
+            source_url="https://youtube.com/watch?v=test",
+            cut_mode="youtube",
+            transcription_cache_path=tmp_path / "cache.json",
+            clips=[record],
+            created_at=datetime.now(),
+            output_dir=tmp_path / "out",
+        )
+
+        mock_uploader = MagicMock()
+        mock_uploader.upload.return_value = MagicMock(
+            status="success", url="https://youtu.be/s1", video_id="s1", error=None
+        )
+
+        saved = []
+        from youcut.cli import _publish_clips_with_status
+        with patch("youcut.cli.YouTubeUploader", return_value=mock_uploader), \
+             patch("youcut.cli.InstagramUploader", return_value=MagicMock()), \
+             patch("youcut.cli.TikTokUploader", return_value=MagicMock()), \
+             patch("youcut.cli.save_session", side_effect=lambda s: saved.append(s) or tmp_path / "s.json"):
+            _publish_clips_with_status([record], ["youtube"], tmp_path / "creds", session=session)
+
+        assert len(saved) == 1
+        assert saved[0] is session
+
+    def test_multiple_platforms_one_fails_other_continues(self, tmp_path, monkeypatch):
+        """When one platform fails, the other still gets its status recorded."""
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+        record = self._make_record(tmp_path)
+
+        mock_yt = MagicMock()
+        mock_yt.upload.return_value = MagicMock(
+            status="failed", url=None, video_id=None, error="quota"
+        )
+        mock_ig = MagicMock()
+        mock_ig.upload.return_value = MagicMock(
+            status="success", url="https://instagram.com/p/abc", video_id=None, error=None
+        )
+
+        def build_uploader(cls_mock):
+            return cls_mock
+
+        from youcut.cli import _publish_clips_with_status
+        with patch("youcut.cli.YouTubeUploader", return_value=mock_yt), \
+             patch("youcut.cli.InstagramUploader", return_value=mock_ig), \
+             patch("youcut.cli.TikTokUploader", return_value=MagicMock()):
+            _publish_clips_with_status([record], ["youtube", "instagram"], tmp_path / "creds")
+
+        assert record.upload_status["youtube"] == "failed"
+        assert record.upload_status["instagram"] == "success"
+
+    def test_real_title_used_in_metadata(self, tmp_path, monkeypatch):
+        """ClipRecord.title is passed as metadata title to the uploader."""
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+        record = self._make_record(tmp_path)
+        record_title = record.title
+
+        captured_metadata = []
+        mock_uploader = MagicMock()
+        mock_uploader.upload.side_effect = lambda path, meta, **kw: (
+            captured_metadata.append(meta) or
+            MagicMock(status="success", url="https://youtu.be/x", video_id="x", error=None)
+        )
+
+        from youcut.cli import _publish_clips_with_status
+        with patch("youcut.cli.YouTubeUploader", return_value=mock_uploader), \
+             patch("youcut.cli.InstagramUploader", return_value=MagicMock()), \
+             patch("youcut.cli.TikTokUploader", return_value=MagicMock()):
+            _publish_clips_with_status([record], ["youtube"], tmp_path / "creds")
+
+        assert len(captured_metadata) == 1
+        assert captured_metadata[0].title == record_title
+
+
+# ---------------------------------------------------------------------------
+# Task 7.0 — Auto mode menu
+# ---------------------------------------------------------------------------
+
+class TestAutoMode:
+    def test_auto_mode_confirmed_sets_skip_review_true(self, tmp_path, monkeypatch):
+        """When user confirms auto mode, run_flow_a is called with skip_review=True."""
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+
+        run_flow_a_calls = []
+
+        def fake_run_flow_a(source, cfg, *, skip_review, **kw):
+            run_flow_a_calls.append({"skip_review": skip_review})
+            return None
+
+        with (
+            patch("youcut.cli.sys.stdin.isatty", return_value=True),
+            patch("youcut.cli.sys.stdout.isatty", return_value=True),
+            patch("youcut.cli._select_cut_mode", return_value="youtube"),
+            patch("youcut.cli.questionary.text", return_value=MagicMock(ask=MagicMock(return_value=""))),
+            patch("youcut.cli.normalize_video_url", return_value="https://youtube.com/watch?v=test"),
+            patch("youcut.cli.fetch_metadata", return_value=MagicMock(title="Test", duration_seconds=600)),
+            patch("youcut.cli.questionary.confirm", side_effect=[
+                MagicMock(ask=MagicMock(return_value=True)),   # "Prosseguir com este vídeo?"
+                MagicMock(ask=MagicMock(return_value=True)),   # "Executar tudo automaticamente?"
+            ]),
+            patch("youcut.cli._parse_platforms", return_value=["youtube"]),
+            patch("youcut.cli.run_flow_a", side_effect=fake_run_flow_a),
+            patch("youcut.cli._check_ffmpeg"),
+            patch("youcut.cli._configure_logging"),
+        ):
+            from youcut.cli import cuts
+            cuts(
+                source="https://youtube.com/watch?v=test",
+                history=False,
+                max_clips=None,
+                skip_review=False,
+                upload=False,
+                platforms_raw="youtube",
+                log_level="INFO",
+                log_file=None,
+            )
+
+        assert len(run_flow_a_calls) == 1
+        assert run_flow_a_calls[0]["skip_review"] is True
+
+    def test_auto_mode_declined_preserves_original_skip_review(self, tmp_path, monkeypatch):
+        """When user declines auto mode, run_flow_a uses original skip_review value (False)."""
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+
+        run_flow_a_calls = []
+
+        def fake_run_flow_a(source, cfg, *, skip_review, **kw):
+            run_flow_a_calls.append({"skip_review": skip_review})
+            return None
+
+        with (
+            patch("youcut.cli.sys.stdin.isatty", return_value=True),
+            patch("youcut.cli.sys.stdout.isatty", return_value=True),
+            patch("youcut.cli._select_cut_mode", return_value="youtube"),
+            patch("youcut.cli.questionary.text", return_value=MagicMock(ask=MagicMock(return_value=""))),
+            patch("youcut.cli.normalize_video_url", return_value="https://youtube.com/watch?v=test"),
+            patch("youcut.cli.fetch_metadata", return_value=MagicMock(title="Test", duration_seconds=600)),
+            patch("youcut.cli.questionary.confirm", side_effect=[
+                MagicMock(ask=MagicMock(return_value=True)),    # "Prosseguir?"
+                MagicMock(ask=MagicMock(return_value=False)),   # "Automático?" — declined
+            ]),
+            patch("youcut.cli._parse_platforms", return_value=["youtube"]),
+            patch("youcut.cli.run_flow_a", side_effect=fake_run_flow_a),
+            patch("youcut.cli._check_ffmpeg"),
+            patch("youcut.cli._configure_logging"),
+        ):
+            from youcut.cli import cuts
+            cuts(
+                source="https://youtube.com/watch?v=test",
+                history=False,
+                max_clips=None,
+                skip_review=False,
+                upload=False,
+                platforms_raw="youtube",
+                log_level="INFO",
+                log_file=None,
+            )
+
+        assert len(run_flow_a_calls) == 1
+        assert run_flow_a_calls[0]["skip_review"] is False

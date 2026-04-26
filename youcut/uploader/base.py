@@ -19,6 +19,7 @@ class UploadResult(BaseModel):
     status: Literal["success", "skipped", "failed", "pending"]
     url: str | None = None
     error: str | None = None
+    video_id: str | None = None
 
 
 class UploadReport(BaseModel):
