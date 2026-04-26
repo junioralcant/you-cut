@@ -536,3 +536,88 @@ class TestGateFlowB:
             )
 
         assert len(run_flow_b_calls) == 0
+
+
+# ---------------------------------------------------------------------------
+# Task 1.0 — run_flow_b retorna list[ClipRecord]
+# ---------------------------------------------------------------------------
+
+class TestRunFlowBReturnType:
+    def test_returns_clip_records_when_clips_generated(
+        self, social_config, youtube_session, short_clip_path, mock_short_clip
+    ):
+        """run_flow_b deve retornar list[ClipRecord] quando clipes são gerados."""
+        with (
+            patch("youcut.cli.transcribe"),
+            patch("youcut.cli.analyze", return_value=[mock_short_clip]),
+            patch("youcut.cli.cut_clip", return_value=short_clip_path),
+        ):
+            from youcut.cli import run_flow_b
+            result = run_flow_b(
+                session=youtube_session,
+                selected_clips=youtube_session.clips,
+                config=social_config,
+                skip_review=True,
+                upload=False,
+            )
+
+        assert isinstance(result, list)
+        assert len(result) >= 1
+        assert all(isinstance(r, ClipRecord) for r in result)
+
+    def test_returns_empty_list_when_cache_missing(self, tmp_path, social_config, youtube_session):
+        """run_flow_b retorna [] quando o cache de transcrição não existe."""
+        missing_session = youtube_session.model_copy(
+            update={"transcription_cache_path": tmp_path / "nonexistent_transcript.json"}
+        )
+
+        with patch("youcut.cli.transcribe"):
+            from youcut.cli import run_flow_b
+            result = run_flow_b(
+                session=missing_session,
+                selected_clips=missing_session.clips,
+                config=social_config,
+                skip_review=True,
+                upload=False,
+            )
+
+        assert result == []
+
+    def test_returns_empty_list_when_no_short_clips_identified(
+        self, social_config, youtube_session
+    ):
+        """run_flow_b retorna [] quando analyze() retorna lista vazia."""
+        with (
+            patch("youcut.cli.transcribe"),
+            patch("youcut.cli.analyze", return_value=[]),
+        ):
+            from youcut.cli import run_flow_b
+            result = run_flow_b(
+                session=youtube_session,
+                selected_clips=youtube_session.clips,
+                config=social_config,
+                skip_review=True,
+                upload=False,
+            )
+
+        assert result == []
+
+    def test_offer_flow_b_unaffected_by_return_value(
+        self, social_config, youtube_session, short_clip_path
+    ):
+        """offer_flow_b ignora o retorno de run_flow_b sem quebrar."""
+        with (
+            patch("youcut.cli.run_flow_b", return_value=[ClipRecord(
+                title="x", start_time=0, end_time=1,
+                clip_path=short_clip_path, thumbnail_path=None, approved=True,
+            )]),
+            patch("youcut.cli.questionary.confirm", return_value=MagicMock(ask=MagicMock(return_value=False))),
+            patch("youcut.cli.time.sleep"),
+        ):
+            from youcut.cli import offer_flow_b
+            offer_flow_b(
+                session=youtube_session,
+                config=social_config,
+                skip_review=True,
+                upload=False,
+            )

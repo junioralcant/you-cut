@@ -2,6 +2,7 @@
 
 import json
 import uuid
+from contextlib import ExitStack
 from datetime import datetime
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -503,84 +504,235 @@ class TestPublishClipsWithStatus:
 # ---------------------------------------------------------------------------
 
 class TestAutoMode:
-    def test_auto_mode_confirmed_sets_skip_review_true(self, tmp_path, monkeypatch):
-        """When user confirms auto mode, run_flow_a is called with skip_review=True."""
-        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    def _cuts_kwargs(self, **overrides):
+        base = dict(
+            source="https://youtube.com/watch?v=test",
+            history=False,
+            max_clips=None,
+            skip_review=False,
+            upload=False,
+            platforms_raw="youtube",
+            log_level="INFO",
+            log_file=None,
+        )
+        base.update(overrides)
+        return base
 
-        run_flow_a_calls = []
-
-        def fake_run_flow_a(source, cfg, *, skip_review, **kw):
-            run_flow_a_calls.append({"skip_review": skip_review})
-            return None
-
-        with (
+    def _base_patches(self):
+        return [
             patch("youcut.cli.sys.stdin.isatty", return_value=True),
             patch("youcut.cli.sys.stdout.isatty", return_value=True),
             patch("youcut.cli._select_cut_mode", return_value="youtube"),
             patch("youcut.cli.questionary.text", return_value=MagicMock(ask=MagicMock(return_value=""))),
             patch("youcut.cli.normalize_video_url", return_value="https://youtube.com/watch?v=test"),
             patch("youcut.cli.fetch_metadata", return_value=MagicMock(title="Test", duration_seconds=600)),
-            patch("youcut.cli.questionary.confirm", side_effect=[
-                MagicMock(ask=MagicMock(return_value=True)),   # "Prosseguir com este vídeo?"
-                MagicMock(ask=MagicMock(return_value=True)),   # "Executar tudo automaticamente?"
-            ]),
+            patch("youcut.cli.questionary.confirm", return_value=MagicMock(ask=MagicMock(return_value=True))),
             patch("youcut.cli._parse_platforms", return_value=["youtube"]),
-            patch("youcut.cli.run_flow_a", side_effect=fake_run_flow_a),
             patch("youcut.cli._check_ffmpeg"),
             patch("youcut.cli._configure_logging"),
-        ):
-            from youcut.cli import cuts
-            cuts(
-                source="https://youtube.com/watch?v=test",
-                history=False,
-                max_clips=None,
-                skip_review=False,
-                upload=False,
-                platforms_raw="youtube",
-                log_level="INFO",
-                log_file=None,
-            )
+        ]
 
-        assert len(run_flow_a_calls) == 1
-        assert run_flow_a_calls[0]["skip_review"] is True
-
-    def test_auto_mode_declined_preserves_original_skip_review(self, tmp_path, monkeypatch):
-        """When user declines auto mode, run_flow_a uses original skip_review value (False)."""
+    def test_auto_mode_selected_calls_run_auto_pipeline(self, tmp_path, monkeypatch):
+        """When user selects 'auto', _run_auto_pipeline is called (not run_flow_a directly)."""
         monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+        auto_pipeline_calls = []
 
+        with ExitStack() as stack:
+            for p in self._base_patches():
+                stack.enter_context(p)
+            stack.enter_context(patch("youcut.cli._select_execution_mode", return_value="auto"))
+            stack.enter_context(patch("youcut.cli._run_auto_pipeline", side_effect=lambda *a, **kw: auto_pipeline_calls.append(a)))
+            from youcut.cli import cuts
+            cuts(**self._cuts_kwargs())
+
+        assert len(auto_pipeline_calls) == 1
+
+    def test_manual_mode_selected_calls_run_flow_a_with_original_skip_review(self, tmp_path, monkeypatch):
+        """When user selects 'manual', run_flow_a uses the original CLI skip_review value."""
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
         run_flow_a_calls = []
 
         def fake_run_flow_a(source, cfg, *, skip_review, **kw):
             run_flow_a_calls.append({"skip_review": skip_review})
             return None
 
-        with (
-            patch("youcut.cli.sys.stdin.isatty", return_value=True),
-            patch("youcut.cli.sys.stdout.isatty", return_value=True),
-            patch("youcut.cli._select_cut_mode", return_value="youtube"),
-            patch("youcut.cli.questionary.text", return_value=MagicMock(ask=MagicMock(return_value=""))),
-            patch("youcut.cli.normalize_video_url", return_value="https://youtube.com/watch?v=test"),
-            patch("youcut.cli.fetch_metadata", return_value=MagicMock(title="Test", duration_seconds=600)),
-            patch("youcut.cli.questionary.confirm", side_effect=[
-                MagicMock(ask=MagicMock(return_value=True)),    # "Prosseguir?"
-                MagicMock(ask=MagicMock(return_value=False)),   # "Automático?" — declined
-            ]),
-            patch("youcut.cli._parse_platforms", return_value=["youtube"]),
-            patch("youcut.cli.run_flow_a", side_effect=fake_run_flow_a),
-            patch("youcut.cli._check_ffmpeg"),
-            patch("youcut.cli._configure_logging"),
-        ):
+        with ExitStack() as stack:
+            for p in self._base_patches():
+                stack.enter_context(p)
+            stack.enter_context(patch("youcut.cli._select_execution_mode", return_value="manual"))
+            stack.enter_context(patch("youcut.cli.run_flow_a", side_effect=fake_run_flow_a))
             from youcut.cli import cuts
-            cuts(
-                source="https://youtube.com/watch?v=test",
-                history=False,
-                max_clips=None,
-                skip_review=False,
-                upload=False,
-                platforms_raw="youtube",
-                log_level="INFO",
-                log_file=None,
-            )
+            cuts(**self._cuts_kwargs(skip_review=False))
 
         assert len(run_flow_a_calls) == 1
         assert run_flow_a_calls[0]["skip_review"] is False
+
+    def test_manual_mode_does_not_call_run_auto_pipeline(self, tmp_path, monkeypatch):
+        """When user selects 'manual', _run_auto_pipeline is never called."""
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+        auto_pipeline_calls = []
+
+        with ExitStack() as stack:
+            for p in self._base_patches():
+                stack.enter_context(p)
+            stack.enter_context(patch("youcut.cli._select_execution_mode", return_value="manual"))
+            stack.enter_context(patch("youcut.cli.run_flow_a", return_value=None))
+            stack.enter_context(patch("youcut.cli._run_auto_pipeline", side_effect=lambda *a, **kw: auto_pipeline_calls.append(a)))
+            from youcut.cli import cuts
+            cuts(**self._cuts_kwargs())
+
+        assert len(auto_pipeline_calls) == 0
+
+
+class TestAutoModePipeline:
+    """Tests for _run_auto_pipeline() — the automatic pipeline orchestrator."""
+
+    @pytest.fixture
+    def auto_config(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        from youcut.config import PipelineConfig
+        return PipelineConfig(cut_mode="youtube", output_dir=tmp_path / "output")
+
+    @pytest.fixture
+    def fake_session(self, tmp_path):
+        import uuid
+        from datetime import datetime
+        p = tmp_path / "clip.mp4"
+        p.touch()
+        cache = tmp_path / "transcript.json"
+        cache.write_text("{}", encoding="utf-8")
+        return SessionData(
+            session_id=str(uuid.uuid4()),
+            source_url="https://youtube.com/watch?v=test",
+            cut_mode="youtube",
+            transcription_cache_path=cache,
+            clips=[
+                ClipRecord(
+                    title="YT Clip",
+                    start_time=0.0,
+                    end_time=300.0,
+                    clip_path=p,
+                    thumbnail_path=None,
+                    approved=True,
+                )
+            ],
+            created_at=datetime.now(),
+            output_dir=tmp_path,
+        )
+
+    def test_run_flow_a_called_with_skip_review_and_upload(self, auto_config, fake_session):
+        """run_flow_a is called with skip_review=True, upload=True, platforms=['youtube']."""
+        flow_a_calls = []
+
+        def fake_flow_a(source, cfg, *, skip_review, upload, platforms, **kw):
+            flow_a_calls.append(dict(skip_review=skip_review, upload=upload, platforms=platforms))
+            return fake_session
+
+        with (
+            patch("youcut.cli.run_flow_a", side_effect=fake_flow_a),
+            patch("youcut.cli.run_flow_b", return_value=[]),
+            patch("youcut.cli._show_consolidated_summary"),
+        ):
+            from youcut.cli import _run_auto_pipeline
+            _run_auto_pipeline("https://youtube.com/watch?v=test", auto_config)
+
+        assert len(flow_a_calls) == 1
+        assert flow_a_calls[0]["skip_review"] is True
+        assert flow_a_calls[0]["upload"] is True
+        assert flow_a_calls[0]["platforms"] == ["youtube"]
+
+    def test_run_flow_b_called_with_skip_review_and_social_platforms(self, auto_config, fake_session):
+        """run_flow_b is called with skip_review=True, upload=True, platforms=['tiktok', 'instagram']."""
+        flow_b_calls = []
+
+        def fake_flow_b(session, selected_clips, config, *, skip_review, upload, platforms, **kw):
+            flow_b_calls.append(dict(skip_review=skip_review, upload=upload, platforms=platforms))
+            return []
+
+        with (
+            patch("youcut.cli.run_flow_a", return_value=fake_session),
+            patch("youcut.cli.run_flow_b", side_effect=fake_flow_b),
+            patch("youcut.cli._show_consolidated_summary"),
+        ):
+            from youcut.cli import _run_auto_pipeline
+            _run_auto_pipeline("https://youtube.com/watch?v=test", auto_config)
+
+        assert len(flow_b_calls) == 1
+        assert flow_b_calls[0]["skip_review"] is True
+        assert flow_b_calls[0]["upload"] is True
+        assert set(flow_b_calls[0]["platforms"]) == {"tiktok", "instagram"}
+
+    def test_run_flow_b_not_called_when_flow_a_returns_none(self, auto_config):
+        """If run_flow_a returns None, run_flow_b is never called."""
+        flow_b_calls = []
+
+        with (
+            patch("youcut.cli.run_flow_a", return_value=None),
+            patch("youcut.cli.run_flow_b", side_effect=lambda *a, **kw: flow_b_calls.append(True)),
+            patch("youcut.cli._show_consolidated_summary"),
+        ):
+            from youcut.cli import _run_auto_pipeline
+            _run_auto_pipeline("https://youtube.com/watch?v=test", auto_config)
+
+        assert len(flow_b_calls) == 0
+
+    def test_show_consolidated_summary_called_even_when_flow_b_empty(self, auto_config, fake_session):
+        """_show_consolidated_summary is called even when run_flow_b returns []."""
+        summary_calls = []
+
+        with (
+            patch("youcut.cli.run_flow_a", return_value=fake_session),
+            patch("youcut.cli.run_flow_b", return_value=[]),
+            patch("youcut.cli._show_consolidated_summary", side_effect=lambda yt, soc: summary_calls.append((yt, soc))),
+        ):
+            from youcut.cli import _run_auto_pipeline
+            _run_auto_pipeline("https://youtube.com/watch?v=test", auto_config)
+
+        assert len(summary_calls) == 1
+        yt_records, social_records = summary_calls[0]
+        assert social_records == []
+
+    def test_show_consolidated_summary_receives_yt_records_from_session(self, auto_config, fake_session):
+        """_show_consolidated_summary receives session.clips as yt_records."""
+        summary_calls = []
+
+        with (
+            patch("youcut.cli.run_flow_a", return_value=fake_session),
+            patch("youcut.cli.run_flow_b", return_value=[]),
+            patch("youcut.cli._show_consolidated_summary", side_effect=lambda yt, soc: summary_calls.append((yt, soc))),
+        ):
+            from youcut.cli import _run_auto_pipeline
+            _run_auto_pipeline("https://youtube.com/watch?v=test", auto_config)
+
+        yt_records, _ = summary_calls[0]
+        assert yt_records == fake_session.clips
+
+    def test_flow_b_receives_only_approved_clips(self, auto_config, fake_session):
+        """run_flow_b receives only approved clips from the session (gate relaxado)."""
+        rejected = ClipRecord(
+            title="Rejected",
+            start_time=300.0,
+            end_time=400.0,
+            clip_path=fake_session.clips[0].clip_path,
+            thumbnail_path=None,
+            approved=False,
+        )
+        fake_session.clips.append(rejected)
+
+        flow_b_clips = []
+
+        def fake_flow_b(session, selected_clips, config, **kw):
+            flow_b_clips.extend(selected_clips)
+            return []
+
+        with (
+            patch("youcut.cli.run_flow_a", return_value=fake_session),
+            patch("youcut.cli.run_flow_b", side_effect=fake_flow_b),
+            patch("youcut.cli._show_consolidated_summary"),
+        ):
+            from youcut.cli import _run_auto_pipeline
+            _run_auto_pipeline("https://youtube.com/watch?v=test", auto_config)
+
+        assert all(c.approved for c in flow_b_clips)
+        assert len(flow_b_clips) == 1

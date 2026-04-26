@@ -32,6 +32,9 @@ class PipelineConfig(BaseSettings):
     max_clips: int | None = None
     openai_api_key: str | None = None
     session_timeout_minutes: int = 7
+    face_tracking: bool = False
+    huggingface_token: str | None = None
+    face_detection_confidence: float = 0.5
 
     @model_validator(mode="after")
     def validate_api_key_present(self) -> "PipelineConfig":

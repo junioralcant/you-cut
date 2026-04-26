@@ -4,6 +4,26 @@ from typing import Literal
 
 from pydantic import BaseModel, field_validator
 
+
+class SpeakerSegment(BaseModel):
+    speaker_id: str
+    start: float
+    end: float
+
+
+class CropRegion(BaseModel):
+    x: int
+    y: int
+    w: int
+    h: int
+
+
+class FaceTrackingResult(BaseModel):
+    frame_regions: list[CropRegion | None]
+    had_faces: bool
+    is_split_screen: list[bool]
+    secondary_regions: list[CropRegion | None]
+
 CutMode = Literal["social", "youtube"]
 
 

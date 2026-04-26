@@ -8,7 +8,7 @@ import time
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
 
 import questionary
 import typer
@@ -20,6 +20,7 @@ from rich.table import Table
 from youcut.analyzer import analyze
 from youcut.captioner import add_captions
 from youcut.clipper import cut_clip
+from youcut.face_tracker import apply_face_tracking
 from youcut.config import PipelineConfig
 from youcut.downloader import VideoDownloadError, download_video
 from youcut.exporter import export_metadata
@@ -527,6 +528,26 @@ def _select_cut_mode() -> CutMode:
     return mode
 
 
+def _select_execution_mode() -> Literal["manual", "auto"]:
+    mode = questionary.select(
+        "Como deseja executar os cortes?",
+        choices=[
+            questionary.Choice(
+                "Manual — Revisão de clipes, oferta de Social com timer, seleção de plataformas",
+                value="manual",
+            ),
+            questionary.Choice(
+                "Automático (YouTube + Social) — Pipeline completo sem interrupções: "
+                "download → cortes → thumbnails → upload YouTube → clipes sociais → upload Social",
+                value="auto",
+            ),
+        ],
+    ).ask()
+    if mode is None:
+        raise typer.Exit(code=0)
+    return mode
+
+
 def _load_transcription_from_cache(cache_path: Path) -> TranscriptionResult:
     data = json.loads(cache_path.read_text(encoding="utf-8"))
     return TranscriptionResult.model_validate(data["result"])
@@ -543,6 +564,64 @@ def _show_records_table(records: list[ClipRecord]) -> None:
         status = "[green]aprovado[/green]" if r.approved else "[red]rejeitado[/red]"
         table.add_row(str(i + 1), r.title, duration, status)
     _console.print(table)
+
+
+def _show_consolidated_summary(
+    yt_records: list[ClipRecord],
+    social_records: list[ClipRecord],
+) -> None:
+    table = Table(
+        title="Resumo Consolidado — YouTube + Social",
+        show_header=True,
+        header_style="bold cyan",
+    )
+    table.add_column("Tipo", width=8, justify="center")
+    table.add_column("Título")
+    table.add_column("Duração", width=10, justify="center")
+    table.add_column("Plataforma", width=12, justify="center")
+    table.add_column("Status", width=10, justify="center")
+
+    _STATUS_DISPLAY: dict[str, tuple[str, str | None]] = {
+        "success": ("[green]success[/green]", "success"),
+        "failed":  ("[red]failed[/red]",   "failed"),
+        "pending": ("[yellow]pending[/yellow]", "failed"),
+        "skipped": ("[dim]skipped[/dim]",   None),
+    }
+
+    counters: dict[str, dict[str, int]] = {}
+
+    def _add_rows(records: list[ClipRecord], tipo: str) -> None:
+        for r in records:
+            duration = f"{r.end_time - r.start_time:.0f}s"
+            if r.upload_status:
+                for platform, status in r.upload_status.items():
+                    status_fmt, counter_key = _STATUS_DISPLAY.get(
+                        status, ("[red]failed[/red]", "failed")
+                    )
+                    if counter_key is not None:
+                        if platform not in counters:
+                            counters[platform] = {"success": 0, "failed": 0}
+                        counters[platform][counter_key] += 1
+                    table.add_row(tipo, r.title, duration, platform, status_fmt)
+            else:
+                table.add_row(tipo, r.title, duration, "—", "[dim]sem upload[/dim]")
+
+    _add_rows(yt_records, "[bold blue]YouTube[/bold blue]")
+    _add_rows(social_records, "[bold magenta]Social[/bold magenta]")
+
+    _console.print(table)
+
+    if counters:
+        summary_parts = []
+        for platform, counts in sorted(counters.items()):
+            summary_parts.append(
+                f"[bold]{platform}[/bold]: [green]{counts['success']} ok[/green] / [red]{counts['failed']} falhou[/red]"
+            )
+        _console.print(Panel(
+            "  |  ".join(summary_parts),
+            title="[bold]Uploads por Plataforma[/bold]",
+            border_style="cyan",
+        ))
 
 
 def _show_sessions_table(sessions: list[SessionData]) -> None:
@@ -823,7 +902,7 @@ def run_flow_b(
     skip_review: bool = False,
     upload: bool = False,
     platforms: list[str] | None = None,
-) -> None:
+) -> list[ClipRecord]:
     """Fluxo B: vídeos curtos a partir de cortes longos existentes (sem reprocessar áudio)."""
     _console.print(Panel(
         "[cyan]Fonte: cortes locais já gerados — o áudio não será reprocessado.[/cyan]",
@@ -837,13 +916,13 @@ def run_flow_b(
             title="[red]Erro[/red]",
             border_style="red",
         ))
-        return
+        return []
 
     try:
         transcription = _load_transcription_from_cache(session.transcription_cache_path)
     except Exception as e:
         _err_console.print(Panel(str(e), title="[red]Erro ao carregar transcrição[/red]", border_style="red"))
-        return
+        return []
 
     logger.info("Fluxo B: transcrição reutilizada de %s (transcribe() não chamado)", session.transcription_cache_path)
 
@@ -852,10 +931,13 @@ def run_flow_b(
             cut_mode="social",
             max_clips=config.max_clips,
             output_dir=config.output_dir / f"flow_b_{session.session_id[:8]}",
+            face_tracking=config.face_tracking,
+            huggingface_token=config.huggingface_token,
+            face_detection_confidence=config.face_detection_confidence,
         )
     except Exception as e:
         _err_console.print(Panel(str(e), title="[red]Erro de Configuração[/red]", border_style="red"))
-        return
+        return []
 
     all_short_clips: list[ViralClip] = []
     all_clip_sources: list[Path] = []
@@ -912,13 +994,26 @@ def run_flow_b(
 
         if not all_short_clips:
             _console.print("[yellow]Nenhum trecho curto identificado nos cortes selecionados.[/yellow]")
-            return
+            return []
 
         short_clip_paths: list[Path | None] = []
         task_cut = progress.add_task("Cortando vídeos curtos (9:16)...", total=len(all_short_clips))
         for i, (sc, src) in enumerate(zip(all_short_clips, all_clip_sources)):
             try:
                 cp = cut_clip(src, sc, i, social_config)
+                if social_config.cut_mode == "social" and social_config.face_tracking:
+                    logger.info("Aplicando face tracking ao clipe %s...", cp.name)
+                    try:
+                        tracked = apply_face_tracking(cp, social_config)
+                        if tracked == cp:
+                            logger.warning(
+                                "Face tracking não aplicado para %s — usando enquadramento original.", cp.name
+                            )
+                        cp = tracked
+                    except Exception as ft_exc:
+                        logger.warning(
+                            "Face tracking falhou com erro: %s — exportando clipe original.", ft_exc
+                        )
                 short_clip_paths.append(cp)
             except Exception as e:
                 logger.warning("Erro ao cortar clipe %d: %s", i, e)
@@ -945,7 +1040,7 @@ def run_flow_b(
 
     if not records:
         _console.print("[yellow]Nenhum vídeo curto gerado com sucesso.[/yellow]")
-        return
+        return []
 
     if not skip_review:
         records = review_clips(valid_clips, records, "social")
@@ -963,6 +1058,7 @@ def run_flow_b(
         )
 
     _show_records_table(records)
+    return records
 
 
 def run_flow_c(
@@ -1019,6 +1115,20 @@ def run_flow_c(
         for i, clip in enumerate(viral_clips):
             try:
                 clip_path = cut_clip(video_path, clip, i, config)
+                if config.cut_mode == "social" and config.face_tracking:
+                    logger.info("Aplicando face tracking ao clipe %s...", clip_path.name)
+                    try:
+                        tracked = apply_face_tracking(clip_path, config)
+                        if tracked == clip_path:
+                            logger.warning(
+                                "Face tracking não aplicado para %s — usando enquadramento original.",
+                                clip_path.name,
+                            )
+                        clip_path = tracked
+                    except Exception as ft_exc:
+                        logger.warning(
+                            "Face tracking falhou com erro: %s — exportando clipe original.", ft_exc
+                        )
                 clip_paths.append(clip_path)
             except Exception as e:
                 progress.stop()
@@ -1253,6 +1363,50 @@ def _handle_history(*, skip_review: bool, upload: bool, platforms_raw: str) -> N
     )
 
 
+def _run_auto_pipeline(source: str, config: PipelineConfig) -> None:
+    """Orquestrador do modo automático: Fluxo A → Fluxo B → resumo consolidado."""
+    logger.info("Pipeline automático iniciado: %s", source)
+    _console.print(Panel(
+        "[bold]O modo Automático sempre faz upload para as plataformas configuradas, "
+        "independente do flag --upload.[/bold]\n"
+        "Acompanhe o progresso abaixo. Nenhuma interação será solicitada.",
+        title="[cyan]Modo Automático — YouTube + Social[/cyan]",
+        border_style="cyan",
+    ))
+
+    session = run_flow_a(
+        source,
+        config,
+        skip_review=True,
+        upload=True,
+        platforms=["youtube"],
+    )
+    if session is None:
+        logger.warning("Pipeline automático encerrado: run_flow_a retornou None")
+        return
+
+    yt_records = list(session.clips)
+    approved = [c for c in session.clips if c.approved]
+
+    social_config = PipelineConfig(
+        cut_mode="social",
+        subtitle_style="word",
+        max_clips=config.max_clips,
+        output_dir=config.output_dir,
+    )
+    social_records = run_flow_b(
+        session=session,
+        selected_clips=approved,
+        config=social_config,
+        skip_review=True,
+        upload=True,
+        platforms=["tiktok", "instagram"],
+    )
+
+    _show_consolidated_summary(yt_records, social_records)
+    logger.info("Pipeline automático concluído")
+
+
 @app.command()
 def cuts(
     source: Optional[str] = typer.Argument(None, help="URL do YouTube (deixe em branco para digitar)"),
@@ -1326,31 +1480,27 @@ def cuts(
         raise typer.Exit(code=1)
 
     if mode == "youtube":
-        effective_skip_review = skip_review
-        if _can_prompt_interactively():
-            auto_mode = questionary.confirm(
-                "Executar tudo automaticamente? (sem revisão manual)",
-                default=False,
-            ).ask()
-            if auto_mode:
-                effective_skip_review = True
+        execution_mode = _select_execution_mode() if _can_prompt_interactively() else "manual"
 
-        # Fluxo A + oferta de Fluxo B
-        session = run_flow_a(
-            url,
-            config,
-            skip_review=effective_skip_review,
-            upload=upload,
-            platforms=selected_platforms,
-        )
-        if session:
-            offer_flow_b(
-                session=session,
-                config=config,
-                skip_review=effective_skip_review,
+        if execution_mode == "auto":
+            _run_auto_pipeline(url, config)
+        else:
+            # Fluxo A + oferta de Fluxo B (path manual existente)
+            session = run_flow_a(
+                url,
+                config,
+                skip_review=skip_review,
                 upload=upload,
                 platforms=selected_platforms,
             )
+            if session:
+                offer_flow_b(
+                    session=session,
+                    config=config,
+                    skip_review=skip_review,
+                    upload=upload,
+                    platforms=selected_platforms,
+                )
     else:
         # Fluxo C
         run_flow_c(
