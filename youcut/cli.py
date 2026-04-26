@@ -930,7 +930,7 @@ def run_flow_b(
         social_config = PipelineConfig(
             cut_mode="social",
             max_clips=config.max_clips,
-            output_dir=config.output_dir / f"flow_b_{session.session_id[:8]}",
+            output_dir=session.output_dir,
             face_tracking=config.face_tracking,
             huggingface_token=config.huggingface_token,
             face_detection_confidence=config.face_detection_confidence,

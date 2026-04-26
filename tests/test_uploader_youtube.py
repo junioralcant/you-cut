@@ -480,6 +480,84 @@ class TestUploadThumbnail:
 # upload() — Shorts detection
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# upload() — thumbnail_status
+# ---------------------------------------------------------------------------
+
+class TestUploadThumbnailStatus:
+    @patch("youcut.uploader.youtube.build")
+    def test_thumbnail_status_uploaded_when_thumbnail_sent(self, mock_build, tmp_path):
+        uploader = _make_uploader(tmp_path)
+
+        mock_youtube = MagicMock()
+        mock_build.return_value = mock_youtube
+        mock_request = MagicMock()
+        mock_youtube.videos.return_value.insert.return_value = mock_request
+        mock_request.next_chunk.return_value = (None, {"id": "vid_thumb_ok"})
+        mock_youtube.thumbnails.return_value.set.return_value.execute.return_value = {}
+
+        video = tmp_path / "clip.mp4"
+        video.write_bytes(b"\x00" * 10)
+        thumbnail = tmp_path / "thumb.png"
+        thumbnail.write_bytes(b"\x89PNG\r\n")
+
+        result = uploader.upload(video, _make_metadata(), thumbnail_path=thumbnail)
+
+        assert result.status == "success"
+        assert result.thumbnail_status == "uploaded"
+
+    @patch("youcut.uploader.youtube.build")
+    def test_thumbnail_status_skipped_when_no_thumbnail_path(self, mock_build, tmp_path):
+        uploader = _make_uploader(tmp_path)
+
+        mock_youtube = MagicMock()
+        mock_build.return_value = mock_youtube
+        mock_request = MagicMock()
+        mock_youtube.videos.return_value.insert.return_value = mock_request
+        mock_request.next_chunk.return_value = (None, {"id": "vid_no_thumb"})
+
+        video = tmp_path / "clip.mp4"
+        video.write_bytes(b"\x00" * 10)
+
+        result = uploader.upload(video, _make_metadata(), thumbnail_path=None)
+
+        assert result.status == "success"
+        assert result.thumbnail_status == "skipped"
+
+    @patch("youcut.uploader.youtube.build")
+    def test_thumbnail_status_failed_and_video_still_success(self, mock_build, tmp_path):
+        uploader = _make_uploader(tmp_path)
+
+        mock_youtube = MagicMock()
+        mock_build.return_value = mock_youtube
+        mock_request = MagicMock()
+        mock_youtube.videos.return_value.insert.return_value = mock_request
+        mock_request.next_chunk.return_value = (None, {"id": "vid_thumb_fail"})
+        mock_youtube.thumbnails.return_value.set.return_value.execute.side_effect = Exception("API error")
+
+        video = tmp_path / "clip.mp4"
+        video.write_bytes(b"\x00" * 10)
+        thumbnail = tmp_path / "thumb.jpg"
+        thumbnail.write_bytes(b"\xff\xd8\xff")
+
+        result = uploader.upload(video, _make_metadata(), thumbnail_path=thumbnail)
+
+        assert result.status == "success"
+        assert result.thumbnail_status == "failed"
+
+    def test_thumbnail_status_field_serialization(self):
+        for value in ("uploaded", "skipped", "failed", None):
+            r = UploadResult(
+                platform="youtube",
+                clip_index=0,
+                status="success",
+                thumbnail_status=value,
+            )
+            assert r.thumbnail_status == value
+            data = r.model_dump()
+            assert data["thumbnail_status"] == value
+
+
 class TestUploadShortsDetection:
     @patch("youcut.uploader.youtube.build")
     def test_shorts_injected_when_cut_mode_social(self, mock_build, tmp_path):

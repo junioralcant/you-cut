@@ -131,6 +131,7 @@ class YouTubeUploader(Uploader):
                 url = f"https://youtu.be/{video_id}"
                 logger.info("YouTube upload succeeded: %s", url)
 
+                thumbnail_status: str | None = None
                 if thumbnail_path is not None:
                     # thumbnails.set costs 50 quota units per call; limit is 10 uploads/channel/24h via API
                     try:
@@ -145,9 +146,13 @@ class YouTubeUploader(Uploader):
                             media_body=thumb_media,
                             media_mime_type=thumb_mime,
                         ).execute()
-                        logger.info("YouTube thumbnail enviada: video_id=%s", video_id)
+                        logger.info("thumbnail_status=uploaded video_id=%s", video_id)
+                        thumbnail_status = "uploaded"
                     except Exception as exc:
-                        logger.warning("Falha ao enviar thumbnail video_id=%s: %s", video_id, exc)
+                        logger.warning("thumbnail_status=failed video_id=%s: %s", video_id, exc)
+                        thumbnail_status = "failed"
+                else:
+                    thumbnail_status = "skipped"
 
                 return UploadResult(
                     platform=_PLATFORM,
@@ -155,6 +160,7 @@ class YouTubeUploader(Uploader):
                     status="success",
                     url=url,
                     video_id=video_id,
+                    thumbnail_status=thumbnail_status,
                 )
 
             except HttpError as exc:
