@@ -277,8 +277,8 @@ class TestAnalyzePromptContent:
         assert "isoladamente" in _SYSTEM_PROMPT or "contexto externo" in _SYSTEM_PROMPT
 
     def test_prompt_mentions_duration_rules(self, config, short_transcription):
-        """Verify SYSTEM_PROMPT mentions 15-60s duration constraint."""
-        assert "15" in _SYSTEM_PROMPT and "60" in _SYSTEM_PROMPT
+        """Verify social-mode SYSTEM_PROMPT mentions 15-180s duration constraint."""
+        assert "15" in _SYSTEM_PROMPT and "180" in _SYSTEM_PROMPT
 
     def test_transcription_passed_to_api(self, config, short_transcription):
         mock_client = _make_mock_client([])

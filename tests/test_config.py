@@ -128,3 +128,28 @@ def test_upload_fields_can_be_overridden(monkeypatch):
     assert config.upload is True
     assert config.platforms == ["youtube"]
     assert config.clips == [1, 3]
+
+
+def test_pipeline_config_new_fields_defaults(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    from youcut.config import PipelineConfig
+    config = PipelineConfig()
+    assert config.cut_mode == "social"
+    assert config.max_clips is None
+    assert config.openai_api_key is None
+    assert config.session_timeout_minutes == 7
+
+
+def test_pipeline_config_accepts_youtube_cut_mode(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    from youcut.config import PipelineConfig
+    config = PipelineConfig(cut_mode="youtube", max_clips=5)
+    assert config.cut_mode == "youtube"
+    assert config.max_clips == 5
+
+
+def test_pipeline_config_session_timeout_minutes(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    from youcut.config import PipelineConfig
+    config = PipelineConfig(session_timeout_minutes=10)
+    assert config.session_timeout_minutes == 10

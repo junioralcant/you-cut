@@ -86,3 +86,10 @@ class TestYouTubeDownload:
         with patch("youcut.downloader.yt_dlp.YoutubeDL", return_value=mock_instance):
             download_video("https://youtube.com/watch?v=abc", new_dir)
         assert new_dir.exists()
+
+    def test_normalizes_shell_escaped_url_before_download(self, tmp_path):
+        mock_instance = self._make_ydl_context(tmp_path, "video.mp4")
+        with patch("youcut.downloader.yt_dlp.YoutubeDL", return_value=mock_instance):
+            download_video(r"https://www.youtube.com/watch\?v\=abc", tmp_path)
+
+        mock_instance.extract_info.assert_called_once_with("https://www.youtube.com/watch?v=abc", download=True)

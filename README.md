@@ -71,6 +71,12 @@ Variáveis opcionais:
 # SUBTITLE_STYLE=word
 # OUTPUT_DIR=output
 # DRY_RUN=false
+
+# Necessário apenas para o modo YouTube (geração de thumbnails via DALL-E 3):
+# OPENAI_API_KEY=sua_chave_openai
+
+# Necessário apenas para publicar no YouTube via youcut cuts --upload:
+# YOUTUBE_CLIENT_SECRETS_FILE=caminho/para/client_secrets.json
 ```
 
 ## Como usar
@@ -149,6 +155,101 @@ Opções disponíveis:
 - `--platforms`: define as plataformas de upload (`youtube`, `instagram`, `tiktok` ou `all`)
 - `--log-level`: nível de log, como `DEBUG`, `INFO`, `WARNING` ou `ERROR`
 - `--log-file`: salva os logs em arquivo
+
+---
+
+## Cortes Inteligentes — `youcut cuts`
+
+O comando `youcut cuts` é o ponto de entrada para gerar cortes otimizados por IA a partir de lives longas, com dois destinos possíveis:
+
+| Modo | Formato | Destino | Duração dos clipes |
+|---|---|---|---|
+| **YouTube** | Paisagem 16:9 | Canal do YouTube | 5–20 min (definida pela IA) |
+| **Redes sociais** | Vertical 9:16 | TikTok, Reels, Shorts | Até ~3 min (definida pela IA) |
+
+O fluxo completo é interativo — basta rodar e responder às perguntas:
+
+```bash
+youcut cuts
+```
+
+Ou passando a URL direto:
+
+```bash
+youcut cuts "https://www.youtube.com/watch?v=exemplo"
+```
+
+### Fluxo A — Cortes longos para YouTube
+
+1. Selecione o modo **YouTube** quando solicitado.
+2. Confirme os metadados exibidos (título e duração do vídeo).
+3. Defina o número máximo de clipes, ou deixe em branco para a IA decidir.
+4. Acompanhe o progresso em tempo real: download → transcrição → análise → corte → thumbnails.
+5. Revise e aprove os clipes (opcional — é possível publicar direto).
+6. Publique no YouTube com `--upload`.
+7. Ao final, uma oferta automática aparece para gerar vídeos curtos a partir dos cortes recém-gerados (Fluxo B).
+
+```bash
+# Modo YouTube com upload automático
+youcut cuts "https://www.youtube.com/watch?v=exemplo" --upload --platforms youtube
+
+# Limitar a 3 clipes e pular revisão
+youcut cuts "https://www.youtube.com/watch?v=exemplo" --max-clips 3 --skip-review
+```
+
+> **Thumbnails:** para gerar thumbnails via DALL-E 3 no modo YouTube, configure `OPENAI_API_KEY` no `.env`.
+
+### Fluxo B — Vídeos curtos a partir de cortes existentes
+
+Ao fim do Fluxo A, o YouCut exibe um card de oferta para gerar vídeos curtos para redes sociais **sem reprocessar o vídeo original** — a transcrição e a análise de NLP já realizadas são reutilizadas.
+
+- **Seleção manual:** escolha quais cortes usar como fonte.
+- **Timeout automático:** se nenhuma seleção for feita em **7 minutos** (padrão), todos os cortes da sessão são processados automaticamente.
+
+O Fluxo B também pode ser iniciado a qualquer momento pelo histórico de sessões:
+
+```bash
+youcut cuts --history
+```
+
+Isso lista todas as sessões anteriores e permite selecionar uma para gerar vídeos curtos a partir dos cortes já existentes, sem baixar nem transcrever novamente.
+
+### Fluxo C — Vídeos curtos direto do vídeo original
+
+Selecione o modo **Redes sociais** para gerar clipes verticais (9:16) diretamente da URL, sem sessão prévia:
+
+```bash
+youcut cuts "https://www.youtube.com/watch?v=exemplo" --skip-review --upload --platforms all
+```
+
+### Opções do comando `cuts`
+
+| Opção | Descrição |
+|---|---|
+| `SOURCE` | URL do YouTube (argumento posicional, opcional — será solicitado se omitido) |
+| `--history`, `-H` | Lista sessões anteriores e permite iniciar o Fluxo B |
+| `--max-clips`, `-n` | Número máximo de clipes a gerar (padrão: IA decide) |
+| `--skip-review` | Pula a revisão interativa e vai direto para publicação |
+| `--upload` | Faz upload dos clipes aprovados ao final do pipeline |
+| `--platforms` | Plataformas de upload: `youtube`, `instagram`, `tiktok` ou `all` |
+| `--log-level` | Nível de log: `DEBUG`, `INFO`, `WARNING`, `ERROR` |
+| `--log-file` | Caminho para salvar o arquivo de log |
+
+### Sessões salvas
+
+Toda execução do Fluxo A salva uma sessão em `~/.youcut/sessions/`. Cada sessão contém:
+
+- URL do vídeo original
+- Modo de corte usado
+- Lista de clipes gerados (com caminhos e metadados)
+- Caminho do cache de transcrição (reutilizado no Fluxo B)
+
+```bash
+# Ver sessões disponíveis e iniciar Fluxo B em qualquer uma
+youcut cuts --history
+```
+
+---
 
 ## Upload Automático
 
@@ -266,16 +367,35 @@ youcut/
   title_overlay.py
   exporter.py
   config.py
+  models.py
+  video_metadata.py
+  session_store.py
+  thumbnail_generator.py
+  reviewer.py
   assets/
 tests/
+~/.youcut/
+  credentials/   ← tokens de autenticação das plataformas
+  sessions/      ← sessões do youcut cuts (JSON)
 ```
 
 ## Resumo da pipeline
 
+### Comando `run` (clipes virais, legado)
+
 - `downloader.py`: resolve arquivo local ou baixa do YouTube com `yt-dlp`
 - `transcriber.py`: transcreve com `faster-whisper` e usa cache
 - `analyzer.py`: usa Claude para escolher os melhores trechos
-- `clipper.py`: corta e adapta o vídeo para formato vertical
+- `clipper.py`: corta e adapta o vídeo para formato vertical ou paisagem
 - `captioner.py`: gera e embute legendas
 - `title_overlay.py`: queima o título nos primeiros 5s do clipe (ativado com `--title-overlay`)
 - `exporter.py`: salva os metadados de publicação
+
+### Comando `cuts` (cortes inteligentes)
+
+- `video_metadata.py`: extrai título e duração do vídeo sem download completo (via `yt-dlp`)
+- `analyzer.py`: modo `youtube` (5–20 min, 16:9) ou `social` (até 3 min, 9:16) com prompts parametrizados
+- `clipper.py`: stream copy sem re-encoding para modo `youtube`; filtro vertical para modo `social`
+- `thumbnail_generator.py`: gera thumbnails via DALL-E 3 (modo `youtube` com `OPENAI_API_KEY`)
+- `reviewer.py`: revisão interativa via terminal com aprovação, edição de título e regeneração de thumbnail
+- `session_store.py`: salva e carrega sessões em `~/.youcut/sessions/` para reaproveitamento no Fluxo B

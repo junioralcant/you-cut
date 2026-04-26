@@ -4,6 +4,8 @@ from typing import Literal
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from youcut.models import CutMode
+
 
 class PipelineConfig(BaseSettings):
     model_config = SettingsConfigDict(
@@ -26,6 +28,10 @@ class PipelineConfig(BaseSettings):
     upload: bool = False
     platforms: list[str] = ["youtube", "instagram", "tiktok"]
     clips: list[int] | None = None
+    cut_mode: CutMode = "social"
+    max_clips: int | None = None
+    openai_api_key: str | None = None
+    session_timeout_minutes: int = 7
 
     @model_validator(mode="after")
     def validate_api_key_present(self) -> "PipelineConfig":

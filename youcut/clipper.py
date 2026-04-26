@@ -34,14 +34,45 @@ def cut_clip(
 ) -> Path:
     check_ffmpeg()
 
-    start = max(0.0, clip.start_time - PADDING)
-    end = clip.end_time + PADDING
-    duration = end - start
-
     output_dir = config.output_dir / video_path.stem
     output_dir.mkdir(parents=True, exist_ok=True)
 
     output_path = output_dir / f"clip_{index + 1:02d}.mp4"
+
+    if clip.cut_mode == "youtube":
+        cmd = _build_youtube_cmd(video_path, clip, output_path)
+    else:
+        cmd = _build_social_cmd(video_path, clip, config, output_path)
+
+    try:
+        subprocess.run(cmd, check=True, capture_output=True)
+    except subprocess.CalledProcessError as e:
+        stderr = e.stderr.decode("utf-8", errors="replace")
+        logger.error("FFmpeg falhou (código %d): %s", e.returncode, stderr)
+        raise
+
+    return output_path
+
+
+def _build_youtube_cmd(video_path: Path, clip: ViralClip, output_path: Path) -> list[str]:
+    duration = clip.end_time - clip.start_time
+    return [
+        "ffmpeg",
+        "-ss", str(clip.start_time),
+        "-i", str(video_path),
+        "-t", str(duration),
+        "-c", "copy",
+        "-y",
+        str(output_path),
+    ]
+
+
+def _build_social_cmd(
+    video_path: Path, clip: ViralClip, config: PipelineConfig, output_path: Path
+) -> list[str]:
+    start = max(0.0, clip.start_time - PADDING)
+    end = clip.end_time + PADDING
+    duration = end - start
 
     use_blur = config.blur_background or config.vertical_fill_mode == "blur_background"
     if config.blur_background:
@@ -51,7 +82,7 @@ def cut_clip(
     strategy = "blur_background" if use_blur else "fill_crop"
     logger.info("Estratégia de enquadramento vertical: %s", strategy)
     if use_blur:
-        cmd = [
+        return [
             "ffmpeg",
             "-ss", str(start),
             "-i", str(video_path),
@@ -64,24 +95,14 @@ def cut_clip(
             "-y",
             str(output_path),
         ]
-    else:
-        cmd = [
-            "ffmpeg",
-            "-ss", str(start),
-            "-i", str(video_path),
-            "-t", str(duration),
-            "-vf", build_vertical_fill_filter(),
-            "-c:v", "libx264",
-            "-c:a", "aac",
-            "-y",
-            str(output_path),
-        ]
-
-    try:
-        subprocess.run(cmd, check=True, capture_output=True)
-    except subprocess.CalledProcessError as e:
-        stderr = e.stderr.decode("utf-8", errors="replace")
-        logger.error("FFmpeg falhou (código %d): %s", e.returncode, stderr)
-        raise
-
-    return output_path
+    return [
+        "ffmpeg",
+        "-ss", str(start),
+        "-i", str(video_path),
+        "-t", str(duration),
+        "-vf", build_vertical_fill_filter(),
+        "-c:v", "libx264",
+        "-c:a", "aac",
+        "-y",
+        str(output_path),
+    ]
