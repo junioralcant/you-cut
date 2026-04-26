@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from youcut.caption_burner import CaptionBurner, _format_srt_time
+from youcut.models import CaptionBurnResult
 
 
 # ---------------------------------------------------------------------------
@@ -98,8 +99,11 @@ class TestBurnSuccess:
 
             result = burner.burn(video)
 
-        assert result.name == "clip_captioned.mp4"
-        assert result != video
+        assert isinstance(result, CaptionBurnResult)
+        assert result.output_path.name == "clip_captioned.mp4"
+        assert result.output_path != video
+        assert result.captions_applied is True
+        assert result.warning is None
 
     @patch("youcut.caption_burner.subprocess.run")
     def test_burn_output_has_captioned_suffix(self, mock_run, tmp_path):
@@ -115,7 +119,7 @@ class TestBurnSuccess:
 
             result = burner.burn(video)
 
-        assert "_captioned" in result.stem
+        assert "_captioned" in result.output_path.stem
 
 
 # ---------------------------------------------------------------------------
@@ -131,7 +135,9 @@ class TestBurnWhisperFallback:
         with patch.object(burner, "_transcribe_words", side_effect=RuntimeError("whisper unavailable")):
             result = burner.burn(video)
 
-        assert result == video
+        assert result.output_path == video
+        assert result.captions_applied is False
+        assert "Transcrição falhou" in result.warning
 
     def test_no_exception_raised_when_whisper_fails(self, tmp_path):
         burner = CaptionBurner()
@@ -142,7 +148,7 @@ class TestBurnWhisperFallback:
             # Should not raise
             result = burner.burn(video)
 
-        assert result == video
+        assert result.output_path == video
 
     def test_warning_logged_when_whisper_fails(self, tmp_path, caplog):
         import logging
@@ -155,6 +161,21 @@ class TestBurnWhisperFallback:
                 burner.burn(video)
 
         assert any("transcrição falhou" in record.message for record in caplog.records)
+
+    def test_returns_structured_fallback_when_srt_generation_fails(self, tmp_path):
+        burner = CaptionBurner()
+        video = tmp_path / "clip.mp4"
+        video.write_bytes(b"\x00" * 10)
+
+        with (
+            patch.object(burner, "_transcribe_words", return_value=[{"word": "oi", "start": 0.0, "end": 0.5}]),
+            patch.object(burner, "_write_word_srt", side_effect=RuntimeError("disk full")),
+        ):
+            result = burner.burn(video)
+
+        assert result.output_path == video
+        assert result.captions_applied is False
+        assert "Geração de SRT falhou" in result.warning
 
 
 # ---------------------------------------------------------------------------
@@ -173,7 +194,9 @@ class TestBurnFFmpegFallback:
             with patch.object(burner, "_ffmpeg_burn", side_effect=subprocess.CalledProcessError(1, "ffmpeg")):
                 result = burner.burn(video)
 
-        assert result == video
+        assert result.output_path == video
+        assert result.captions_applied is False
+        assert "FFmpeg falhou" in result.warning
 
     def test_no_exception_raised_when_ffmpeg_fails(self, tmp_path):
         burner = CaptionBurner()
@@ -186,7 +209,7 @@ class TestBurnFFmpegFallback:
             with patch.object(burner, "_ffmpeg_burn", side_effect=Exception("ffmpeg not found")):
                 result = burner.burn(video)
 
-        assert result == video
+        assert result.output_path == video
 
     def test_warning_logged_when_ffmpeg_fails(self, tmp_path, caplog):
         import logging

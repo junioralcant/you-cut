@@ -45,6 +45,8 @@ class ClipRecord(BaseModel):
     youtube_video_id: str | None = None
     youtube_url: str | None = None
     upload_status: dict[str, str] = {}
+    captions_applied: bool = True
+    caption_warning: str | None = None
 
 
 class SessionData(BaseModel):
@@ -74,6 +76,26 @@ class TranscriptionResult(BaseModel):
     segments: list[TranscriptionSegment]
     language: str
     source_path: Path
+
+
+class CaptionBurnResult(BaseModel):
+    output_path: Path
+    captions_applied: bool
+    warning: str | None = None
+
+    def __fspath__(self) -> str:
+        return str(self.output_path)
+
+    def __str__(self) -> str:
+        return str(self.output_path)
+
+    def __getattr__(self, name: str):
+        return getattr(self.output_path, name)
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, Path):
+            return self.output_path == other
+        return super().__eq__(other)
 
 
 class ViralClip(BaseModel):

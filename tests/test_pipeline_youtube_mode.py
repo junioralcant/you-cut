@@ -726,7 +726,16 @@ class TestAutoModePipeline:
         flow_b_calls = []
 
         def fake_flow_b(session, selected_clips, config, *, skip_review, upload, platforms, **kw):
-            flow_b_calls.append(dict(skip_review=skip_review, upload=upload, platforms=platforms))
+            flow_b_calls.append(
+                dict(
+                    skip_review=skip_review,
+                    upload=upload,
+                    platforms=platforms,
+                    cut_mode=config.cut_mode,
+                    subtitle_style=config.subtitle_style,
+                    max_clips=config.max_clips,
+                )
+            )
             return []
 
         with (
@@ -741,6 +750,9 @@ class TestAutoModePipeline:
         assert flow_b_calls[0]["skip_review"] is True
         assert flow_b_calls[0]["upload"] is True
         assert set(flow_b_calls[0]["platforms"]) == {"tiktok", "instagram"}
+        assert flow_b_calls[0]["cut_mode"] == "social"
+        assert flow_b_calls[0]["subtitle_style"] == "word"
+        assert flow_b_calls[0]["max_clips"] == auto_config.max_clips
 
     def test_run_flow_b_not_called_when_flow_a_returns_none(self, auto_config):
         """If run_flow_a returns None, run_flow_b is never called."""

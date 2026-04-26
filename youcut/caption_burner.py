@@ -3,6 +3,8 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from youcut.models import CaptionBurnResult
+
 logger = logging.getLogger(__name__)
 
 # Force-style params for SRT burn-in: Arial Bold 48, white fill, black outline 2px,
@@ -25,24 +27,28 @@ def _format_srt_time(seconds: float) -> str:
 
 
 class CaptionBurner:
-    def burn(self, video_path: Path, style: str = "word") -> Path:
+    def burn(self, video_path: Path, style: str = "word") -> CaptionBurnResult:
         try:
             words = self._transcribe_words(video_path)
         except Exception as exc:
+            warning = f"Transcrição falhou: {exc}"
             logger.warning("CaptionBurner: transcrição falhou para %s: %s — sem legenda.", video_path.name, exc)
-            return video_path
+            return CaptionBurnResult(output_path=video_path, captions_applied=False, warning=warning)
 
         try:
             srt_path = self._write_word_srt(words, video_path)
         except Exception as exc:
+            warning = f"Geração de SRT falhou: {exc}"
             logger.warning("CaptionBurner: falha ao gerar SRT para %s: %s — sem legenda.", video_path.name, exc)
-            return video_path
+            return CaptionBurnResult(output_path=video_path, captions_applied=False, warning=warning)
 
         try:
-            return self._ffmpeg_burn(video_path, srt_path)
+            output_path = self._ffmpeg_burn(video_path, srt_path)
+            return CaptionBurnResult(output_path=output_path, captions_applied=True)
         except Exception as exc:
+            warning = f"FFmpeg falhou: {exc}"
             logger.warning("CaptionBurner: FFmpeg falhou para %s: %s — sem legenda.", video_path.name, exc)
-            return video_path
+            return CaptionBurnResult(output_path=video_path, captions_applied=False, warning=warning)
         finally:
             srt_path.unlink(missing_ok=True)
 

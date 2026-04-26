@@ -24,7 +24,7 @@ from youcut.face_tracker import apply_face_tracking
 from youcut.config import PipelineConfig
 from youcut.downloader import VideoDownloadError, download_video
 from youcut.exporter import export_metadata
-from youcut.models import ClipRecord, CutMode, SessionData, TranscriptionResult, ViralClip
+from youcut.models import CaptionBurnResult, ClipRecord, CutMode, SessionData, TranscriptionResult, ViralClip
 from youcut.preview import generate_clip_preview
 from youcut.reviewer import review_clips
 from youcut.selector import prompt_clip_selection
@@ -736,6 +736,25 @@ def _can_prompt_interactively() -> bool:
     return sys.stdin.isatty() and sys.stdout.isatty()
 
 
+def _build_social_pipeline_config(
+    base_config: PipelineConfig | None = None,
+    *,
+    output_dir: Path | None = None,
+) -> PipelineConfig:
+    """Normaliza o contrato de entrada do fluxo social pós-upload."""
+    return PipelineConfig(
+        cut_mode="social",
+        subtitle_style="word",
+        max_clips=base_config.max_clips if base_config else None,
+        output_dir=output_dir or (base_config.output_dir if base_config else Path("output")),
+        face_tracking=base_config.face_tracking if base_config else False,
+        huggingface_token=base_config.huggingface_token if base_config else None,
+        face_detection_confidence=(
+            base_config.face_detection_confidence if base_config else 0.5
+        ),
+    )
+
+
 def _resolve_upload_platforms(
     *,
     upload: bool,
@@ -771,6 +790,12 @@ def _resolve_upload_platforms(
         return []
 
     return list(selected_platforms)
+
+
+def _extract_cut_result(cut_result: Path | CaptionBurnResult) -> tuple[Path, bool, str | None]:
+    if isinstance(cut_result, CaptionBurnResult):
+        return cut_result.output_path, cut_result.captions_applied, cut_result.warning
+    return cut_result, True, None
 
 
 def run_flow_a(
@@ -830,6 +855,7 @@ def run_flow_a(
         for i, clip in enumerate(viral_clips):
             try:
                 clip_path = cut_clip(video_path, clip, i, config)
+                clip_path, _, _ = _extract_cut_result(clip_path)
                 clip_paths.append(clip_path)
             except Exception as e:
                 progress.stop()
@@ -938,13 +964,9 @@ def run_flow_b(
     logger.info("Fluxo B: transcrição reutilizada de %s (transcribe() não chamado)", session.transcription_cache_path)
 
     try:
-        social_config = PipelineConfig(
-            cut_mode="social",
-            max_clips=config.max_clips,
+        social_config = _build_social_pipeline_config(
+            config,
             output_dir=session.output_dir,
-            face_tracking=config.face_tracking,
-            huggingface_token=config.huggingface_token,
-            face_detection_confidence=config.face_detection_confidence,
         )
     except Exception as e:
         _err_console.print(Panel(str(e), title="[red]Erro de Configuração[/red]", border_style="red"))
@@ -1007,45 +1029,55 @@ def run_flow_b(
             _console.print("[yellow]Nenhum trecho curto identificado nos cortes selecionados.[/yellow]")
             return []
 
-        short_clip_paths: list[Path | None] = []
+        short_clip_results: list[tuple[Path, bool, str | None] | None] = []
         task_cut = progress.add_task("Cortando vídeos curtos (9:16)...", total=len(all_short_clips))
         for i, (sc, src) in enumerate(zip(all_short_clips, all_clip_sources)):
             try:
                 cp = cut_clip(src, sc, i, social_config)
+                clip_path, captions_applied, caption_warning = _extract_cut_result(cp)
+                if not captions_applied and caption_warning:
+                    warning_message = (
+                        f"Clipe '{sc.title}' gerado sem legenda: {caption_warning}"
+                    )
+                    logger.warning(warning_message)
+                    _console.print(f"[yellow]! {warning_message}[/yellow]")
                 if social_config.cut_mode == "social" and social_config.face_tracking:
-                    logger.info("Aplicando face tracking ao clipe %s...", cp.name)
+                    logger.info("Aplicando face tracking ao clipe %s...", clip_path.name)
                     try:
-                        tracked = apply_face_tracking(cp, social_config)
-                        if tracked == cp:
+                        tracked = apply_face_tracking(clip_path, social_config)
+                        if tracked == clip_path:
                             logger.warning(
-                                "Face tracking não aplicado para %s — usando enquadramento original.", cp.name
+                                "Face tracking não aplicado para %s — usando enquadramento original.", clip_path.name
                             )
-                        cp = tracked
+                        clip_path = tracked
                     except Exception as ft_exc:
                         logger.warning(
                             "Face tracking falhou com erro: %s — exportando clipe original.", ft_exc
                         )
-                short_clip_paths.append(cp)
+                short_clip_results.append((clip_path, captions_applied, caption_warning))
             except Exception as e:
                 logger.warning("Erro ao cortar clipe %d: %s", i, e)
-                short_clip_paths.append(None)
+                short_clip_results.append(None)
             progress.advance(task_cut)
         progress.update(task_cut, description="[green]Vídeos curtos cortados[/green]")
 
     records: list[ClipRecord] = []
     valid_clips: list[ViralClip] = []
-    for sc, cp in zip(all_short_clips, short_clip_paths):
-        if cp is None:
+    for sc, cut_result in zip(all_short_clips, short_clip_results):
+        if cut_result is None:
             continue
+        clip_path, captions_applied, caption_warning = cut_result
         records.append(ClipRecord(
             title=sc.title,
             start_time=sc.start_time,
             end_time=sc.end_time,
-            clip_path=cp,
+            clip_path=clip_path,
             thumbnail_path=None,
             approved=True,
             description=sc.description,
             hashtags=sc.hashtags,
+            captions_applied=captions_applied,
+            caption_warning=caption_warning,
         ))
         valid_clips.append(sc)
 
@@ -1122,10 +1154,12 @@ def run_flow_c(
             return
 
         clip_paths: list[Path] = []
+        caption_statuses: list[tuple[bool, str | None]] = []
         task_cut = progress.add_task("Cortando clipes (9:16)...", total=len(viral_clips))
         for i, clip in enumerate(viral_clips):
             try:
                 clip_path = cut_clip(video_path, clip, i, config)
+                clip_path, captions_applied, caption_warning = _extract_cut_result(clip_path)
                 if config.cut_mode == "social" and config.face_tracking:
                     logger.info("Aplicando face tracking ao clipe %s...", clip_path.name)
                     try:
@@ -1141,6 +1175,7 @@ def run_flow_c(
                             "Face tracking falhou com erro: %s — exportando clipe original.", ft_exc
                         )
                 clip_paths.append(clip_path)
+                caption_statuses.append((captions_applied, caption_warning))
             except Exception as e:
                 progress.stop()
                 _err_console.print(Panel(str(e), title="[red]Erro ao cortar clipe[/red]", border_style="red"))
@@ -1150,6 +1185,7 @@ def run_flow_c(
 
     clip_records: list[ClipRecord] = []
     for i, (clip, clip_path) in enumerate(zip(viral_clips, clip_paths)):
+        captions_applied, caption_warning = caption_statuses[i] if i < len(caption_statuses) else (True, None)
         clip_records.append(ClipRecord(
             title=clip.title,
             start_time=clip.start_time,
@@ -1159,6 +1195,8 @@ def run_flow_c(
             approved=True,
             description=clip.description,
             hashtags=clip.hashtags,
+            captions_applied=captions_applied,
+            caption_warning=caption_warning,
         ))
 
     if not skip_review:
@@ -1338,7 +1376,7 @@ def _handle_history(*, skip_review: bool, upload: bool, platforms_raw: str) -> N
 
     try:
         plats = _parse_platforms(platforms_raw) if upload else list(_SUPPORTED_PLATFORMS)
-        config = PipelineConfig(cut_mode="social")
+        config = _build_social_pipeline_config(output_dir=session.output_dir)
     except Exception as e:
         _err_console.print(Panel(str(e), title="[red]Erro de Configuração[/red]", border_style="red"))
         return
@@ -1399,12 +1437,7 @@ def _run_auto_pipeline(source: str, config: PipelineConfig) -> None:
     yt_records = list(session.clips)
     approved = [c for c in session.clips if c.approved]
 
-    social_config = PipelineConfig(
-        cut_mode="social",
-        subtitle_style="word",
-        max_clips=config.max_clips,
-        output_dir=config.output_dir,
-    )
+    social_config = _build_social_pipeline_config(config, output_dir=config.output_dir)
     social_records = run_flow_b(
         session=session,
         selected_clips=approved,

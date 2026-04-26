@@ -6,7 +6,7 @@ import pytest
 from youcut.caption_burner import CaptionBurner
 from youcut.clipper import PADDING, cut_clip
 from youcut.config import PipelineConfig
-from youcut.models import ViralClip
+from youcut.models import CaptionBurnResult, ViralClip
 
 
 @pytest.fixture
@@ -199,12 +199,16 @@ class TestCaptionBurnerIntegration:
             patch("youcut.clipper.CaptionBurner") as mock_burner_cls,
         ):
             mock_run.return_value = MagicMock(returncode=0)
-            mock_burner_cls.return_value.burn.return_value = captioned_path
+            mock_burner_cls.return_value.burn.return_value = CaptionBurnResult(
+                output_path=captioned_path,
+                captions_applied=True,
+            )
 
             result = cut_clip(video_path, social_clip, 0, config)
 
         mock_burner_cls.return_value.burn.assert_called_once()
-        assert result == captioned_path
+        assert result.output_path == captioned_path
+        assert result.captions_applied is True
 
     def test_social_clip_burn_called_with_style_word(self, config, social_clip, tmp_path):
         video_path = tmp_path / "video.mp4"
@@ -217,7 +221,10 @@ class TestCaptionBurnerIntegration:
             patch("youcut.clipper.CaptionBurner") as mock_burner_cls,
         ):
             mock_run.return_value = MagicMock(returncode=0)
-            mock_burner_cls.return_value.burn.return_value = captioned_path
+            mock_burner_cls.return_value.burn.return_value = CaptionBurnResult(
+                output_path=captioned_path,
+                captions_applied=True,
+            )
 
             cut_clip(video_path, social_clip, 0, config)
 
@@ -251,12 +258,17 @@ class TestCaptionBurnerIntegration:
             patch("youcut.clipper.CaptionBurner") as mock_burner_cls,
         ):
             mock_run.return_value = MagicMock(returncode=0)
-            # Simulate CaptionBurner fallback: returns the clip path unchanged
-            mock_burner_cls.return_value.burn.side_effect = lambda p, style="word": p
+            mock_burner_cls.return_value.burn.return_value = CaptionBurnResult(
+                output_path=tmp_path / "output" / "video" / "clip_01.mp4",
+                captions_applied=False,
+                warning="FFmpeg falhou: libass ausente",
+            )
 
             result = cut_clip(video_path, social_clip, 0, config)
 
-        assert result.name == "clip_01.mp4"
+        assert result.output_path.name == "clip_01.mp4"
+        assert result.captions_applied is False
+        assert "FFmpeg falhou" in result.warning
 
     def test_no_circular_import(self):
         import importlib

@@ -11,6 +11,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from youcut.models import (
+    CaptionBurnResult,
     ClipRecord,
     SessionData,
     TranscriptionResult,
@@ -203,6 +204,46 @@ class TestFlowBGeneratesSocialClips:
         assert cut_calls[0]["src"] == youtube_session.clips[0].clip_path
         # Config must be social mode
         assert cut_calls[0]["cfg"].cut_mode == "social"
+
+    def test_incoming_youtube_config_is_normalized_to_social(
+        self, tmp_path, monkeypatch, youtube_session, short_clip_path, mock_short_clip
+    ):
+        """Flow B must force social mode even if the caller passes a youtube config."""
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+        from youcut.config import PipelineConfig
+
+        youtube_config = PipelineConfig(
+            cut_mode="youtube",
+            max_clips=7,
+            output_dir=tmp_path / "youtube-output",
+            face_tracking=True,
+        )
+        cut_calls = []
+
+        def capture_cut(src, clip, idx, cfg):
+            cut_calls.append(cfg)
+            return short_clip_path
+
+        with (
+            patch("youcut.cli.transcribe"),
+            patch("youcut.cli.analyze", return_value=[mock_short_clip]),
+            patch("youcut.cli.cut_clip", side_effect=capture_cut),
+        ):
+            from youcut.cli import run_flow_b
+            run_flow_b(
+                session=youtube_session,
+                selected_clips=youtube_session.clips,
+                config=youtube_config,
+                skip_review=True,
+                upload=False,
+            )
+
+        assert len(cut_calls) == 1
+        assert cut_calls[0].cut_mode == "social"
+        assert cut_calls[0].subtitle_style == "word"
+        assert cut_calls[0].max_clips == 7
+        assert cut_calls[0].face_tracking is True
+        assert cut_calls[0].output_dir == youtube_session.output_dir
 
     def test_timestamps_adjusted_relative_to_clip(
         self, social_config, youtube_session, short_clip_path, mock_short_clip
@@ -420,6 +461,68 @@ class TestFlowBHistoryIntegration:
             )
 
         assert len(cut_calls) >= 1
+
+    def test_handle_history_passes_social_config_to_flow_b(self, monkeypatch, youtube_session):
+        """History mode must enter Flow B with an explicit social PipelineConfig."""
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+        flow_b_configs = []
+
+        def fake_run_flow_b(session, selected_clips, config, **kwargs):
+            flow_b_configs.append(config)
+            return []
+
+        with (
+            patch("youcut.cli.list_sessions", return_value=[youtube_session]),
+            patch("youcut.cli._show_sessions_table"),
+            patch("youcut.cli.questionary.select", return_value=MagicMock(ask=MagicMock(return_value="1. Sessão"))),
+            patch("youcut.cli.questionary.checkbox", return_value=MagicMock(ask=MagicMock(return_value=[]))),
+            patch("youcut.cli.run_flow_b", side_effect=fake_run_flow_b),
+        ):
+            from youcut.cli import _handle_history
+            _handle_history(skip_review=True, upload=False, platforms_raw="all")
+
+        assert len(flow_b_configs) == 1
+        assert flow_b_configs[0].cut_mode == "social"
+        assert flow_b_configs[0].subtitle_style == "word"
+        assert flow_b_configs[0].output_dir == youtube_session.output_dir
+
+
+class TestFlowBCaptionWarnings:
+    def test_fallback_caption_result_emits_warning_and_keeps_pipeline_running(
+        self, social_config, youtube_session, short_clip_path, mock_short_clip
+    ):
+        printed_messages = []
+
+        with (
+            patch("youcut.cli.transcribe"),
+            patch("youcut.cli.analyze", return_value=[mock_short_clip]),
+            patch(
+                "youcut.cli.cut_clip",
+                return_value=CaptionBurnResult(
+                    output_path=short_clip_path,
+                    captions_applied=False,
+                    warning="FFmpeg falhou: libass ausente",
+                ),
+            ),
+            patch(
+                "youcut.cli._console.print",
+                side_effect=lambda *args, **kwargs: printed_messages.append(args[0]) if args else None,
+            ),
+        ):
+            from youcut.cli import run_flow_b
+            records = run_flow_b(
+                session=youtube_session,
+                selected_clips=youtube_session.clips,
+                config=social_config,
+                skip_review=True,
+                upload=False,
+            )
+
+        assert len(records) == 1
+        assert records[0].clip_path == short_clip_path
+        assert records[0].captions_applied is False
+        assert records[0].caption_warning == "FFmpeg falhou: libass ausente"
+        assert any("gerado sem legenda" in str(message) for message in printed_messages)
 
 
 # ---------------------------------------------------------------------------

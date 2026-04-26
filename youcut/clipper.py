@@ -5,7 +5,7 @@ from pathlib import Path
 
 from youcut.caption_burner import CaptionBurner
 from youcut.config import PipelineConfig
-from youcut.models import ViralClip
+from youcut.models import CaptionBurnResult, ViralClip
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +32,7 @@ def check_ffmpeg() -> None:
 
 def cut_clip(
     video_path: Path, clip: ViralClip, index: int, config: PipelineConfig
-) -> Path:
+) -> Path | CaptionBurnResult:
     check_ffmpeg()
 
     output_dir = config.output_dir / video_path.stem
