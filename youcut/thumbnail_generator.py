@@ -9,7 +9,7 @@ from youcut.models import ClipRecord, ViralClip
 logger = logging.getLogger(__name__)
 
 _DALLE_MODEL = "dall-e-3"
-_DALLE_SIZE = "1280x720"
+_DALLE_SIZE = "1792x1024"
 _DALLE_QUALITY = "standard"
 
 
