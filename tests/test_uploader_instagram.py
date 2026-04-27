@@ -94,6 +94,39 @@ class TestUploadSuccess:
         assert result.clip_index == 1
         assert result.error is None
 
+    def test_caption_payload_contains_description_and_hashtags_once(self, token_dir, video_file):
+        metadata = ClipMetadata(
+            title="Test Reel",
+            description="Legenda limpa",
+            hashtags=["viral", "#corte"],
+            caption="Legenda limpa",
+        )
+        payloads: list[dict[str, str]] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            url = str(request.url)
+            if url.endswith(f"/{_IG_USER_ID}") and request.method == "GET":
+                return httpx.Response(200, json={"account_type": "BUSINESS", "id": _IG_USER_ID})
+            if url.endswith(f"/{_IG_USER_ID}/media") and request.method == "POST":
+                payloads.append(dict(__import__("urllib.parse").parse_qsl(request.content.decode("utf-8"))))
+                return httpx.Response(200, json={"id": _CONTAINER_ID})
+            if url.endswith(f"/{_CONTAINER_ID}") and request.method == "POST":
+                return httpx.Response(200, json={"success": True})
+            if url.endswith(f"/{_CONTAINER_ID}") and request.method == "GET":
+                return httpx.Response(200, json={"status_code": "FINISHED", "id": _CONTAINER_ID})
+            if url.endswith(f"/{_IG_USER_ID}/media_publish") and request.method == "POST":
+                return httpx.Response(200, json={"id": _MEDIA_ID})
+            return httpx.Response(404, text="not found")
+
+        transport = httpx.MockTransport(handler)
+        uploader = _make_uploader(token_dir, transport)
+
+        result = uploader.upload(video_file, metadata, clip_index=9)
+
+        assert result.status == "success"
+        assert payloads
+        assert payloads[0]["caption"] == "Legenda limpa\n\n#viral #corte"
+
 
 class TestPollingInProgressThenFinished:
     def test_polls_until_finished(self, token_dir, video_file, metadata):

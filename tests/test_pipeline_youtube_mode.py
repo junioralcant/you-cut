@@ -344,6 +344,30 @@ class TestPublishClipsWithStatus:
             thumbnail_path=thumb,
         )
 
+    def test_social_metadata_keeps_description_raw_for_uploader(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+        record = self._make_record(tmp_path)
+        record.description = "Legenda do reel"
+        record.hashtags = ["viral", "#corte"]
+
+        captured_metadata = []
+        mock_uploader = MagicMock()
+        mock_uploader.upload.side_effect = lambda path, meta, **kw: (
+            captured_metadata.append(meta) or
+            MagicMock(status="success", url="https://instagram.com/reel/abc", video_id=None, error=None)
+        )
+
+        from youcut.cli import _publish_clips_with_status
+        with patch("youcut.cli.YouTubeUploader", return_value=MagicMock()), \
+             patch("youcut.cli.InstagramUploader", return_value=mock_uploader), \
+             patch("youcut.cli.TikTokUploader", return_value=MagicMock()):
+            _publish_clips_with_status([record], ["instagram"], tmp_path / "creds")
+
+        assert len(captured_metadata) == 1
+        assert captured_metadata[0].description == "Legenda do reel"
+        assert captured_metadata[0].hashtags == ["viral", "#corte"]
+        assert captured_metadata[0].caption == "Legenda do reel"
+
     def test_upload_status_set_on_success(self, tmp_path, monkeypatch):
         """upload_status['youtube'] is set to 'success' after a successful upload."""
         monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")

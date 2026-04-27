@@ -120,6 +120,27 @@ class TestUploadSuccess:
         assert result.error is not None
         assert "rascunho" in result.error.lower() or "draft" in result.error.lower()
 
+    def test_init_request_for_draft_upload_sends_only_source_info(self, token_dir, video_file, metadata):
+        received_init_body: dict = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            url = str(request.url)
+            if "init" in url:
+                received_init_body.update(__import__("json").loads(request.content))
+                return httpx.Response(200, json={"data": {"publish_id": _PUBLISH_ID, "upload_url": "https://fake.upload/"}})
+            if "fake.upload" in url:
+                return httpx.Response(200, json={"data": {}})
+            return httpx.Response(404, text="not found")
+
+        transport = httpx.MockTransport(handler)
+        uploader = _make_uploader(token_dir, transport)
+
+        result = uploader.upload(video_file, metadata, clip_index=2)
+
+        assert result.status == "pending"
+        assert "source_info" in received_init_body
+        assert "post_info" not in received_init_body
+
 
 class TestPollingSkipped:
     def test_no_status_request_after_upload(self, token_dir, video_file, metadata):
@@ -213,6 +234,7 @@ class TestPendingMessageContent:
         assert result.error is not None
         msg = result.error.lower()
         assert "rascunho" in msg or "draft" in msg or "app" in msg
+        assert "legenda" in msg or "hashtags" in msg
 
 
 class TestChunkSizeLimit:

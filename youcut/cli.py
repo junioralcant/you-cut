@@ -743,15 +743,11 @@ def _publish_clips_with_status(
             _console.print(f"[dim]Publicando clipe {i + 1}/{len(records)} em {platform}...[/dim]")
             uploader = uploader_map[platform]
             try:
-                hashtag_line = " ".join(f"#{tag.lstrip('#')}" for tag in record.hashtags) if record.hashtags else ""
-                full_description = record.description
-                if hashtag_line:
-                    full_description = f"{full_description}\n\n{hashtag_line}" if full_description else hashtag_line
                 metadata = ClipMetadata(
                     title=record.title,
-                    description=full_description or record.title,
+                    description=record.description,
                     hashtags=record.hashtags,
-                    caption=full_description or record.title,
+                    caption=record.description,
                 )
                 if platform == "youtube":
                     result = uploader.upload(

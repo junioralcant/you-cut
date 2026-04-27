@@ -339,7 +339,7 @@ class TikTokUploader(Uploader):
         logger.info("TikTok OAuth credentials saved.")
 
     def _init_post(
-        self, video_path: Path, caption: str
+        self, video_path: Path
     ) -> tuple[str | None, str | None, str | None]:
         """Initialize TikTok post. Returns (publish_id, upload_url, error_msg)."""
         file_size = video_path.stat().st_size
@@ -355,13 +355,6 @@ class TikTokUploader(Uploader):
                         "Content-Type": "application/json; charset=UTF-8",
                     },
                     json={
-                        "post_info": {
-                            "title": caption,
-                            "privacy_level": "SELF_ONLY",
-                            "disable_duet": False,
-                            "disable_comment": False,
-                            "disable_stitch": False,
-                        },
                         "source_info": {
                             "source": "FILE_UPLOAD",
                             "video_size": file_size,
@@ -486,15 +479,22 @@ class TikTokUploader(Uploader):
         if self._access_token is None:
             self.authenticate()
 
-        # Non-audited apps use video.upload scope — videos land in the creator's inbox as drafts.
+        # The upload endpoint sends the video to TikTok's inbox/draft flow. Caption editing is completed in-app.
         logger.warning(
-            "TikTok: videos are sent to the creator's inbox as drafts (app not yet audited). "
-            "Open TikTok, go to your inbox, and publish the draft to make it public."
+            "TikTok draft upload: the video is sent to the creator inbox for in-app editing. "
+            "Caption and hashtags may need to be finalized inside TikTok before publishing."
         )
 
         meta = apply_platform_limits(metadata, _PLATFORM)
+        logger.info(
+            "TikTok draft metadata prepared: title_len=%d description_len=%d hashtags=%d caption_len=%d",
+            len(meta.title),
+            len(meta.description),
+            len(meta.hashtags),
+            len(meta.caption),
+        )
 
-        publish_id, upload_url, error = self._init_post(video_path, meta.caption)
+        publish_id, upload_url, error = self._init_post(video_path)
         if error:
             logger.error(error)
             return UploadResult(
@@ -510,12 +510,15 @@ class TikTokUploader(Uploader):
 
         logger.info(
             "TikTok chunks uploaded for publish_id=%s. "
-            "Video sent to your TikTok drafts — open the app to publish.",
+            "Video sent to TikTok draft flow — open the app inbox to review caption/hashtags and publish.",
             publish_id,
         )
         return UploadResult(
             platform=_PLATFORM,
             clip_index=clip_index,
             status="pending",
-            error="Vídeo enviado para o rascunho do TikTok. Abra o app para publicar.",
+            error=(
+                "Vídeo enviado para o rascunho do TikTok. Abra a caixa de entrada do app para "
+                "revisar legenda/hashtags e concluir a publicação."
+            ),
         )
