@@ -74,6 +74,7 @@ def _clip(title: str, start: float, end: float, score: float = 8.0) -> dict:
         "description": "D",
         "hashtags": [],
         "thumbnail_idea": "T",
+        "thumbnail_text": "MOMENTO IMPACTANTE",
     }
 
 

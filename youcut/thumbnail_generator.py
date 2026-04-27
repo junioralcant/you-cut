@@ -32,7 +32,7 @@ def generate_thumbnail(
 
     frame_bytes = _select_best_face_frame(source)
     processed = _apply_frame_processing(frame_bytes)
-    composed = _compose_text_overlay(processed, clip.title)
+    composed = _compose_text_overlay(processed, clip.thumbnail_text)
     composed.save(output_path, format="PNG", optimize=True)
     _resize_to_youtube_format(output_path)
 
@@ -69,7 +69,7 @@ def regenerate_thumbnail(
 
     frame_bytes = _select_best_face_frame(clip_record.clip_path)
     processed = _apply_frame_processing(frame_bytes)
-    composed = _compose_text_overlay(processed, clip.title)
+    composed = _compose_text_overlay(processed, clip.thumbnail_text)
     composed.save(output_path, format="PNG", optimize=True)
     _resize_to_youtube_format(output_path)
 

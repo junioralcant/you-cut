@@ -115,6 +115,7 @@ def mock_short_clip():
         description="A key insight from the discussion",
         hashtags=["#viral", "#insight"],
         thumbnail_idea="Speaker making a key point",
+        thumbnail_text="MOMENTO IMPACTANTE",
         cut_mode="social",
     )
 
@@ -307,7 +308,7 @@ class TestFlowBTimerTimeout:
         _real_sleep = _time_mod.sleep
 
         approved_clips = [c for c in youtube_session.clips if c.approved]
-        run_flow_b_calls: list[list[ClipRecord]] = []
+        social_calls: list[list[ClipRecord]] = []
 
         class ImmediateTimer:
             """Fires the callback after 50 ms to simulate a timeout."""
@@ -326,8 +327,8 @@ class TestFlowBTimerTimeout:
             def cancel(self):
                 pass
 
-        def fake_run_flow_b(session, selected_clips, config, **kwargs):
-            run_flow_b_calls.append(list(selected_clips))
+        def fake_run_social(clip_records, config, **kwargs):
+            social_calls.append(list(clip_records))
 
         # Block the selection thread long enough for the timer to fire (50 ms)
         # but let it time-out on its own so the daemon thread exits cleanly.
@@ -345,7 +346,7 @@ class TestFlowBTimerTimeout:
 
         with (
             patch("threading.Timer", ImmediateTimer),
-            patch("youcut.cli.run_flow_b", side_effect=fake_run_flow_b),
+            patch("youcut.cli._run_social_from_clips", side_effect=fake_run_social),
             patch("youcut.cli.time.sleep", side_effect=_capped_sleep),
             patch("youcut.cli.questionary.confirm", side_effect=fake_confirm),
         ):
@@ -360,15 +361,15 @@ class TestFlowBTimerTimeout:
         # After offer_flow_b returns, unblock the daemon selection thread so it exits cleanly
         _selection_unblock.set()
 
-        # run_flow_b must have been called with ALL approved clips
-        assert len(run_flow_b_calls) == 1
-        assert run_flow_b_calls[0] == approved_clips
+        # _run_social_from_clips must have been called with ALL approved clips
+        assert len(social_calls) == 1
+        assert social_calls[0] == approved_clips
 
     def test_user_selection_cancels_timer(
         self, social_config, youtube_session, short_clip_path, mock_short_clip
     ):
         """When user responds before timeout, timer is cancelled and only selected clips are processed."""
-        run_flow_b_calls: list[list[ClipRecord]] = []
+        social_calls: list[list[ClipRecord]] = []
         cancelled_timers: list[bool] = []
 
         class TrackingTimer:
@@ -385,8 +386,8 @@ class TestFlowBTimerTimeout:
                 self._cancelled = True
                 cancelled_timers.append(True)
 
-        def fake_run_flow_b(session, selected_clips, config, **kwargs):
-            run_flow_b_calls.append(list(selected_clips))
+        def fake_run_social(clip_records, config, **kwargs):
+            social_calls.append(list(clip_records))
 
         approved_clips = [c for c in youtube_session.clips if c.approved]
 
@@ -403,7 +404,7 @@ class TestFlowBTimerTimeout:
 
         with (
             patch("youcut.cli.threading.Timer", TrackingTimer),
-            patch("youcut.cli.run_flow_b", side_effect=fake_run_flow_b),
+            patch("youcut.cli._run_social_from_clips", side_effect=fake_run_social),
             patch("youcut.cli.time.sleep"),
             patch("youcut.cli.questionary.confirm", side_effect=fake_confirm),
             patch("youcut.cli.questionary.checkbox", side_effect=fake_checkbox),
@@ -418,10 +419,10 @@ class TestFlowBTimerTimeout:
 
         # Timer was cancelled (user responded before timeout)
         assert len(cancelled_timers) >= 1
-        # run_flow_b was called with the user's selection
-        assert len(run_flow_b_calls) == 1
-        assert len(run_flow_b_calls[0]) == 1
-        assert run_flow_b_calls[0][0].title == approved_clips[0].title
+        # _run_social_from_clips was called with the user's selection
+        assert len(social_calls) == 1
+        assert len(social_calls[0]) == 1
+        assert social_calls[0][0].title == approved_clips[0].title
 
 
 class TestFlowBHistoryIntegration:
@@ -560,13 +561,13 @@ class TestGateFlowB:
         for clip in youtube_session.clips:
             clip.upload_status["youtube"] = "success"
 
-        run_flow_b_calls = []
+        social_calls = []
 
-        def fake_run_flow_b(session, selected_clips, config, **kw):
-            run_flow_b_calls.append(list(selected_clips))
+        def fake_run_social(clip_records, config, **kw):
+            social_calls.append(list(clip_records))
 
         with (
-            patch("youcut.cli.run_flow_b", side_effect=fake_run_flow_b),
+            patch("youcut.cli._run_social_from_clips", side_effect=fake_run_social),
             patch("youcut.cli.questionary.confirm", return_value=MagicMock(ask=MagicMock(return_value=False))),
             patch("youcut.cli.time.sleep"),
         ):
@@ -579,20 +580,20 @@ class TestGateFlowB:
                 platforms=["youtube"],
             )
 
-        # Gate passes: run_flow_b should be called
-        assert len(run_flow_b_calls) == 1
+        # Gate passes: _run_social_from_clips should be called
+        assert len(social_calls) == 1
 
     def test_flow_b_allowed_when_upload_not_requested(
         self, social_config, youtube_session, short_clip_path, mock_short_clip
     ):
         """offer_flow_b proceeds when upload=False (no YouTube uploads required)."""
-        run_flow_b_calls = []
+        social_calls = []
 
-        def fake_run_flow_b(session, selected_clips, config, **kw):
-            run_flow_b_calls.append(list(selected_clips))
+        def fake_run_social(clip_records, config, **kw):
+            social_calls.append(list(clip_records))
 
         with (
-            patch("youcut.cli.run_flow_b", side_effect=fake_run_flow_b),
+            patch("youcut.cli._run_social_from_clips", side_effect=fake_run_social),
             patch("youcut.cli.questionary.confirm", return_value=MagicMock(ask=MagicMock(return_value=False))),
             patch("youcut.cli.time.sleep"),
         ):
@@ -605,7 +606,7 @@ class TestGateFlowB:
             )
 
         # No gate when upload=False
-        assert len(run_flow_b_calls) == 1
+        assert len(social_calls) == 1
 
     def test_flow_b_blocked_partial_youtube_failure(
         self, social_config, youtube_session, long_clip_path, tmp_path
@@ -708,9 +709,9 @@ class TestRunFlowBReturnType:
     def test_offer_flow_b_unaffected_by_return_value(
         self, social_config, youtube_session, short_clip_path
     ):
-        """offer_flow_b ignora o retorno de run_flow_b sem quebrar."""
+        """offer_flow_b ignora o retorno de _run_social_from_clips sem quebrar."""
         with (
-            patch("youcut.cli.run_flow_b", return_value=[ClipRecord(
+            patch("youcut.cli._run_social_from_clips", return_value=[ClipRecord(
                 title="x", start_time=0, end_time=1,
                 clip_path=short_clip_path, thumbnail_path=None, approved=True,
             )]),

@@ -17,6 +17,7 @@ def sample_clip() -> ViralClip:
         description="Neste clipe, revelo a técnica que mudou minha produtividade. Assista até o final!",
         hashtags=["produtividade", "dica", "shorts", "viral"],
         thumbnail_idea="Frame em 00:32 onde o apresentador aponta para a câmera com expressão de surpresa.",
+        thumbnail_text="MOMENTO IMPACTANTE",
     )
 
 
@@ -62,6 +63,7 @@ def test_hashtags_already_prefixed(tmp_path):
         description="Desc",
         hashtags=["#python", "#dev"],
         thumbnail_idea="Frame inicial",
+        thumbnail_text="MOMENTO IMPACTANTE",
     )
     result = export_metadata(clip, index=0, output_dir=tmp_path)
     content = result.read_text(encoding="utf-8")
@@ -81,6 +83,7 @@ def test_utf8_encoding(tmp_path):
         description="Descrição completa com caracteres especiais: ã, ê, ó, ú.",
         hashtags=["português", "conteúdo"],
         thumbnail_idea="Apresentador com expressão de emoção",
+        thumbnail_text="MOMENTO IMPACTANTE",
     )
     result = export_metadata(clip, index=0, output_dir=tmp_path)
     content = result.read_text(encoding="utf-8")
@@ -119,6 +122,7 @@ def test_integer_viral_score_no_decimal(tmp_path):
         description="Desc",
         hashtags=["test"],
         thumbnail_idea="Frame",
+        thumbnail_text="MOMENTO IMPACTANTE",
     )
     result = export_metadata(clip, index=0, output_dir=tmp_path)
     content = result.read_text(encoding="utf-8")
@@ -136,6 +140,7 @@ def test_viral_score_format(tmp_path):
         description="Desc",
         hashtags=["test"],
         thumbnail_idea="Frame",
+        thumbnail_text="MOMENTO IMPACTANTE",
     )
     result = export_metadata(clip, index=0, output_dir=tmp_path)
     content = result.read_text(encoding="utf-8")

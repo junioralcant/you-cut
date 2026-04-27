@@ -77,6 +77,7 @@ class TestAnalyzeMapping:
                 "description": "Veja este conteúdo incrível",
                 "hashtags": ["#python", "#viral"],
                 "thumbnail_idea": "Frame com expressão de surpresa",
+                "thumbnail_text": "MOMENTO IMPACTANTE",
             }
         ]
         mock_client = _make_mock_client(clips_data)
@@ -101,6 +102,7 @@ class TestAnalyzeMapping:
             "description": "Descrição Teste",
             "hashtags": ["#a", "#b"],
             "thumbnail_idea": "Ideia Thumbnail",
+            "thumbnail_text": "MOMENTO IMPACTANTE",
         }
         mock_client = _make_mock_client([raw])
 
@@ -124,17 +126,17 @@ class TestAnalyzeSorting:
             {
                 "title": "Baixo", "reason": "R", "viral_score": 5.0,
                 "start_time": 0.0, "end_time": 30.0, "description": "D",
-                "hashtags": [], "thumbnail_idea": "T",
+                "hashtags": [], "thumbnail_idea": "T", "thumbnail_text": "MOMENTO IMPACTANTE",
             },
             {
                 "title": "Alto", "reason": "R", "viral_score": 9.5,
                 "start_time": 30.0, "end_time": 60.0, "description": "D",
-                "hashtags": [], "thumbnail_idea": "T",
+                "hashtags": [], "thumbnail_idea": "T", "thumbnail_text": "MOMENTO IMPACTANTE",
             },
             {
                 "title": "Médio", "reason": "R", "viral_score": 7.0,
                 "start_time": 60.0, "end_time": 90.0, "description": "D",
-                "hashtags": [], "thumbnail_idea": "T",
+                "hashtags": [], "thumbnail_idea": "T", "thumbnail_text": "MOMENTO IMPACTANTE",
             },
         ]
         mock_client = _make_mock_client(clips_data)
@@ -155,11 +157,13 @@ class TestAnalyzeFiltering:
                 "title": "Muito Curto", "reason": "R", "viral_score": 9.0,
                 "start_time": 0.0, "end_time": MIN_CLIP_DURATION - 1,  # too short
                 "description": "D", "hashtags": [], "thumbnail_idea": "T",
+                "thumbnail_text": "MOMENTO IMPACTANTE",
             },
             {
                 "title": "Válido", "reason": "R", "viral_score": 8.0,
                 "start_time": 0.0, "end_time": 30.0,  # valid
                 "description": "D", "hashtags": [], "thumbnail_idea": "T",
+                "thumbnail_text": "MOMENTO IMPACTANTE",
             },
         ]
         mock_client = _make_mock_client(clips_data)
@@ -176,11 +180,13 @@ class TestAnalyzeFiltering:
                 "title": "Muito Longo", "reason": "R", "viral_score": 9.0,
                 "start_time": 0.0, "end_time": MAX_CLIP_DURATION + 1,  # too long
                 "description": "D", "hashtags": [], "thumbnail_idea": "T",
+                "thumbnail_text": "MOMENTO IMPACTANTE",
             },
             {
                 "title": "Válido", "reason": "R", "viral_score": 8.0,
                 "start_time": 0.0, "end_time": 45.0,  # valid
                 "description": "D", "hashtags": [], "thumbnail_idea": "T",
+                "thumbnail_text": "MOMENTO IMPACTANTE",
             },
         ]
         mock_client = _make_mock_client(clips_data)
@@ -197,6 +203,7 @@ class TestAnalyzeFiltering:
                 "title": "Exatamente 15s", "reason": "R", "viral_score": 8.0,
                 "start_time": 0.0, "end_time": float(MIN_CLIP_DURATION),
                 "description": "D", "hashtags": [], "thumbnail_idea": "T",
+                "thumbnail_text": "MOMENTO IMPACTANTE",
             }
         ]
         mock_client = _make_mock_client(clips_data)
@@ -212,6 +219,7 @@ class TestAnalyzeFiltering:
                 "title": "Exatamente 60s", "reason": "R", "viral_score": 8.0,
                 "start_time": 0.0, "end_time": float(MAX_CLIP_DURATION),
                 "description": "D", "hashtags": [], "thumbnail_idea": "T",
+                "thumbnail_text": "MOMENTO IMPACTANTE",
             }
         ]
         mock_client = _make_mock_client(clips_data)
@@ -329,7 +337,7 @@ class TestAnalyzeEdgeCases:
         clips_data = [
             {"title": "Válido", "reason": "R", "viral_score": 8.0,
              "start_time": 0.0, "end_time": 30.0, "description": "D",
-             "hashtags": [], "thumbnail_idea": "T"},
+             "hashtags": [], "thumbnail_idea": "T", "thumbnail_text": "MOMENTO IMPACTANTE"},
             {"title": "Inválido - falta campos"},  # missing required fields
         ]
         mock_client = _make_mock_client(clips_data)
@@ -377,7 +385,7 @@ class TestAnalyzeChunking:
         clip_data = {
             "title": "Clipe", "reason": "R", "viral_score": 8.0,
             "start_time": 0.0, "end_time": 30.0, "description": "D",
-            "hashtags": [], "thumbnail_idea": "T",
+            "hashtags": [], "thumbnail_idea": "T", "thumbnail_text": "MOMENTO IMPACTANTE",
         }
         mock_client = _make_mock_client([clip_data])
 
@@ -395,10 +403,10 @@ class TestAnalyzeChunking:
         chunk_responses = [
             [{"title": "C1", "reason": "R", "viral_score": 6.0,
               "start_time": 0.0, "end_time": 30.0, "description": "D",
-              "hashtags": [], "thumbnail_idea": "T"}],
+              "hashtags": [], "thumbnail_idea": "T", "thumbnail_text": "MOMENTO IMPACTANTE"}],
             [{"title": "C2", "reason": "R", "viral_score": 9.0,
               "start_time": 1800.0, "end_time": 1830.0, "description": "D",
-              "hashtags": [], "thumbnail_idea": "T"}],
+              "hashtags": [], "thumbnail_idea": "T", "thumbnail_text": "MOMENTO IMPACTANTE"}],
         ]
 
         def side_effect(**kwargs):

@@ -6,6 +6,7 @@ import yt_dlp
 from yt_dlp.utils import DownloadError
 
 from youcut.downloader import VideoDownloadError, download_video
+from youcut.yt_dlp_auth import YtDlpAuthConfig
 
 
 FIXTURE_MP4 = Path(__file__).parent / "fixtures" / "sample.mp4"
@@ -93,3 +94,28 @@ class TestYouTubeDownload:
             download_video(r"https://www.youtube.com/watch\?v\=abc", tmp_path)
 
         mock_instance.extract_info.assert_called_once_with("https://www.youtube.com/watch?v=abc", download=True)
+
+    def test_passes_cookie_file_to_yt_dlp(self, tmp_path):
+        mock_instance = self._make_ydl_context(tmp_path, "video.mp4")
+        cookie_file = tmp_path / "cookies.txt"
+        cookie_file.write_text("cookies", encoding="utf-8")
+
+        with patch("youcut.downloader.yt_dlp.YoutubeDL", return_value=mock_instance) as mock_cls:
+            download_video(
+                "https://youtube.com/watch?v=abc",
+                tmp_path,
+                auth_config=YtDlpAuthConfig(cookie_file=cookie_file),
+            )
+
+        call_opts = mock_cls.call_args[0][0]
+        assert call_opts["cookiefile"] == str(cookie_file)
+
+    def test_download_error_appends_cookie_hint(self, tmp_path):
+        mock_instance = MagicMock()
+        mock_instance.extract_info.side_effect = DownloadError("Sign in to confirm you're not a bot")
+        mock_instance.__enter__ = MagicMock(return_value=mock_instance)
+        mock_instance.__exit__ = MagicMock(return_value=False)
+
+        with patch("youcut.downloader.yt_dlp.YoutubeDL", return_value=mock_instance):
+            with pytest.raises(VideoDownloadError, match="YOUCUT_COOKIES_FROM_BROWSER=chrome"):
+                download_video("https://youtube.com/watch?v=invalid", tmp_path)

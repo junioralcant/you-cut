@@ -17,6 +17,7 @@ def _make_clip(title: str = "Clip") -> ViralClip:
         description="desc",
         hashtags=[],
         thumbnail_idea="idea",
+        thumbnail_text="MOMENTO IMPACTANTE",
         cut_mode="social",
     )
 
@@ -119,6 +120,7 @@ class TestYoutubeMode:
             description="d",
             hashtags=[],
             thumbnail_idea="idea",
+            thumbnail_text="MOMENTO IMPACTANTE",
             cut_mode="youtube",
         )]
         records = [ClipRecord(
@@ -167,6 +169,7 @@ class TestYoutubeMode:
             description="d",
             hashtags=[],
             thumbnail_idea="idea",
+            thumbnail_text="MOMENTO IMPACTANTE",
             cut_mode="youtube",
         )]
         records = [ClipRecord(

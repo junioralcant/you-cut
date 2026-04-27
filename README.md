@@ -77,6 +77,16 @@ Variáveis opcionais:
 
 # Necessário apenas para publicar no YouTube via youcut cuts --upload:
 # YOUTUBE_CLIENT_SECRETS_FILE=caminho/para/client_secrets.json
+
+# Opcional: reutiliza a sessão autenticada do navegador para acessar vídeos
+# do YouTube via yt-dlp quando o site exigir login/anti-bot.
+# Use apenas uma das duas opções abaixo:
+# YOUCUT_COOKIES_FROM_BROWSER=chrome
+# YOUCUT_COOKIES_FILE=/caminho/para/cookies.txt
+
+# Opcional: habilita runtimes JS extras do yt-dlp para resolver desafios
+# modernos do YouTube. Exemplo comum:
+# YOUCUT_YTDLP_JS_RUNTIMES=node
 ```
 
 ## Como usar
@@ -119,6 +129,30 @@ Usando legenda por frase:
 ```bash
 youcut run "./meu-video.mp4" --style phrase
 ```
+
+## Acesso autenticado ao YouTube no yt-dlp
+
+Se o YouTube retornar erros como `HTTP 429` ou `Sign in to confirm you're not a bot`, o
+`youcut` pode reutilizar sua sessão autenticada do navegador via variáveis de ambiente.
+
+Exemplo no `.env`:
+
+```env
+YOUCUT_COOKIES_FROM_BROWSER=chrome
+```
+
+Ou com um arquivo exportado de cookies:
+
+```env
+YOUCUT_COOKIES_FILE=/caminho/para/cookies.txt
+```
+
+Notas:
+
+- defina apenas uma entre `YOUCUT_COOKIES_FROM_BROWSER` e `YOUCUT_COOKIES_FILE`;
+- essa autenticação vale para leitura de metadados e download do vídeo;
+- se o yt-dlp reclamar de `n challenge solving failed`, configure `YOUCUT_YTDLP_JS_RUNTIMES=node`;
+- isso é separado da autenticação OAuth usada para upload no YouTube.
 
 Executando apenas a análise, sem gerar vídeos:
 

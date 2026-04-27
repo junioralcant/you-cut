@@ -45,6 +45,7 @@ def clip():
         description="Test",
         hashtags=[],
         thumbnail_idea="Test",
+        thumbnail_text="MOMENTO IMPACTANTE",
     )
 
 

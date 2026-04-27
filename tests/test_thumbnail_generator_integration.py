@@ -34,6 +34,7 @@ def _make_clip() -> ViralClip:
         description="Descrição do clipe.",
         hashtags=["#youtube"],
         thumbnail_idea="Host explaining excitedly",
+        thumbnail_text="MOMENTO IMPACTANTE",
         cut_mode="youtube",
     )
 

@@ -27,6 +27,7 @@ def _make_clip() -> ViralClip:
         description="The host explains the main topic.",
         hashtags=["#youtube"],
         thumbnail_idea="Host explaining excitedly with charts in background",
+        thumbnail_text="MOMENTO IMPACTANTE",
         cut_mode="youtube",
     )
 

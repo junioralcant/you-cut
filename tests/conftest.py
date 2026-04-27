@@ -45,6 +45,7 @@ def sample_viral_clip():
         description="Descrição de teste para o clipe",
         hashtags=["#teste", "#youcut"],
         thumbnail_idea="Frame com expressão de surpresa no segundo 15",
+        thumbnail_text="MOMENTO IMPACTANTE",
     )
 
 

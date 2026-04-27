@@ -103,6 +103,15 @@ _VIRAL_TOOL = {
                             "type": "string",
                             "description": "Descrição textual do frame mais impactante para thumbnail",
                         },
+                        "thumbnail_text": {
+                            "type": "string",
+                            "description": (
+                                "Frase curta e impactante para exibir na thumbnail — "
+                                "MÁXIMO 6 palavras, estilo chamativo/impactante, "
+                                "DIFERENTE do título, baseada no tema central do clipe. "
+                                "Ex: 'IA VAI DOMINAR O MUNDO', 'SEGREDO QUE NINGUÉM CONTA'"
+                            ),
+                        },
                     },
                     "required": [
                         "title",
@@ -113,6 +122,7 @@ _VIRAL_TOOL = {
                         "description",
                         "hashtags",
                         "thumbnail_idea",
+                        "thumbnail_text",
                     ],
                 },
                 "description": "Lista de clipes virais identificados na transcrição",

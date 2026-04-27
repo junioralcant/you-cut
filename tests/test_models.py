@@ -26,6 +26,7 @@ def test_viral_clip_creation():
         description="Descrição completa do clipe para redes sociais",
         hashtags=["#viral", "#shorts", "#youcut"],
         thumbnail_idea="Frame com expressão de surpresa no segundo 35",
+        thumbnail_text="MOMENTO IMPACTANTE",
     )
     assert clip.title == "Momento Incrível"
     assert clip.viral_score == 9.2
@@ -45,6 +46,7 @@ def test_viral_clip_score_too_high_raises():
             description="desc",
             hashtags=[],
             thumbnail_idea="thumb",
+            thumbnail_text="MOMENTO IMPACTANTE",
         )
 
 
@@ -59,6 +61,7 @@ def test_viral_clip_score_negative_raises():
             description="desc",
             hashtags=[],
             thumbnail_idea="thumb",
+            thumbnail_text="MOMENTO IMPACTANTE",
         )
 
 
@@ -72,6 +75,7 @@ def test_viral_clip_score_boundary_values():
         description="desc",
         hashtags=[],
         thumbnail_idea="thumb",
+        thumbnail_text="MOMENTO IMPACTANTE",
     )
     assert clip_zero.viral_score == 0.0
 
@@ -84,6 +88,7 @@ def test_viral_clip_score_boundary_values():
         description="desc",
         hashtags=[],
         thumbnail_idea="thumb",
+        thumbnail_text="MOMENTO IMPACTANTE",
     )
     assert clip_ten.viral_score == 10.0
 
@@ -205,6 +210,7 @@ def test_viral_clip_accepts_cut_mode():
         description="Descrição",
         hashtags=["#youtube"],
         thumbnail_idea="Frame inicial",
+        thumbnail_text="MOMENTO IMPACTANTE",
         cut_mode="youtube",
     )
     assert clip.cut_mode == "youtube"
@@ -220,6 +226,7 @@ def test_viral_clip_default_cut_mode_is_social():
         description="Desc",
         hashtags=[],
         thumbnail_idea="thumb",
+        thumbnail_text="MOMENTO IMPACTANTE",
     )
     assert clip.cut_mode == "social"
 
@@ -235,6 +242,7 @@ def test_cut_mode_rejects_invalid_value():
             description="Desc",
             hashtags=[],
             thumbnail_idea="thumb",
+            thumbnail_text="MOMENTO IMPACTANTE",
             cut_mode="facebook",
         )
 

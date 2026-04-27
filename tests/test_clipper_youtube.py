@@ -28,6 +28,7 @@ def youtube_clip():
         description="A landscape clip",
         hashtags=["#youtube"],
         thumbnail_idea="Landscape thumbnail",
+        thumbnail_text="MOMENTO IMPACTANTE",
         cut_mode="youtube",
     )
 
@@ -43,6 +44,7 @@ def social_clip():
         description="A vertical clip",
         hashtags=["#social"],
         thumbnail_idea="Vertical thumbnail",
+        thumbnail_text="MOMENTO IMPACTANTE",
         cut_mode="social",
     )
 
@@ -124,6 +126,7 @@ class TestYoutubeMode:
             description="",
             hashtags=[],
             thumbnail_idea="",
+            thumbnail_text="MOMENTO IMPACTANTE",
             cut_mode="youtube",
         )
         video_path = tmp_path / "video.mp4"

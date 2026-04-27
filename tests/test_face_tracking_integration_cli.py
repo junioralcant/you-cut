@@ -51,6 +51,7 @@ def mock_viral_clip():
         description="Test",
         hashtags=["#test"],
         thumbnail_idea="test",
+        thumbnail_text="MOMENTO IMPACTANTE",
         cut_mode="social",
     )
 

@@ -29,6 +29,7 @@ def viral_clip():
         description="A test clip",
         hashtags=["#test"],
         thumbnail_idea="Test thumbnail",
+        thumbnail_text="MOMENTO IMPACTANTE",
     )
 
 
@@ -168,6 +169,7 @@ class TestCutClip:
             description="Test",
             hashtags=[],
             thumbnail_idea="Test",
+            thumbnail_text="MOMENTO IMPACTANTE",
         )
         _, cmd = self._run_cut(video_path, clip, 0, config)
         ss_idx = cmd.index("-ss")

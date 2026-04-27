@@ -40,6 +40,7 @@ from youcut.uploader.tiktok import TikTokUploader
 from youcut.uploader.youtube import YouTubeUploader
 from youcut.url_utils import normalize_video_url
 from youcut.video_metadata import VideoMetadataError, fetch_metadata
+from youcut.yt_dlp_auth import YtDlpAuthConfig, YtDlpAuthConfigError, resolve_yt_dlp_auth_config
 
 logger = logging.getLogger(__name__)
 
@@ -188,6 +189,16 @@ def _check_ffmpeg() -> None:
         raise typer.Exit(code=1)
 
 
+def _resolve_cli_yt_dlp_auth_config() -> YtDlpAuthConfig | None:
+    try:
+        return resolve_yt_dlp_auth_config()
+    except YtDlpAuthConfigError as exc:
+        _err_console.print(
+            Panel(str(exc), title="[red]Erro de Configuração yt-dlp[/red]", border_style="red")
+        )
+        raise typer.Exit(code=1) from exc
+
+
 def _show_clips_table(
     clips: list,
     clip_paths: Optional[list[Path]] = None,
@@ -217,6 +228,163 @@ def _show_clips_table(
         table.add_row(*row)
 
     _console.print(table)
+
+
+class _PipelineError(Exception):
+    """Sinaliza falha interna do pipeline; capturada por chamadores para ação adequada."""
+
+
+def _run_single_source_pipeline(
+    source: str,
+    config: PipelineConfig,
+    *,
+    skip_review: bool = False,
+    upload: bool = False,
+    platforms: list[str] | None = None,
+    auth_config: YtDlpAuthConfig | None = None,
+) -> list[ClipRecord]:
+    """Executa o pipeline completo do `run` para uma fonte (URL ou path local)."""
+    progress = Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        TimeElapsedColumn(),
+        console=_console,
+    )
+
+    viral_clips: list[ViralClip] = []
+    clip_paths: list[Path] = []
+    preview_paths: list[Optional[Path]] = []
+    metadata_paths: list[Path] = []
+
+    with progress:
+        task_dl = progress.add_task("Baixando vídeo...", total=None)
+        try:
+            if auth_config is None:
+                video_path = download_video(source, config.output_dir / "downloads")
+            else:
+                video_path = download_video(source, config.output_dir / "downloads", auth_config=auth_config)
+        except VideoDownloadError as e:
+            progress.stop()
+            _err_console.print(Panel(str(e), title="[red]Erro de Download[/red]", border_style="red"))
+            raise _PipelineError(str(e)) from e
+        except FileNotFoundError as e:
+            progress.stop()
+            _err_console.print(Panel(str(e), title="[red]Arquivo não encontrado[/red]", border_style="red"))
+            raise _PipelineError(str(e)) from e
+        progress.update(task_dl, description="[green]Download concluído[/green]", completed=1, total=1)
+
+        task_tr = progress.add_task("Transcrevendo áudio...", total=None)
+        try:
+            transcription = transcribe(video_path, config)
+        except RuntimeError as e:
+            progress.stop()
+            _err_console.print(Panel(str(e), title="[red]Erro de Transcrição[/red]", border_style="red"))
+            raise _PipelineError(str(e)) from e
+        progress.update(task_tr, description="[green]Transcrição concluída[/green]", completed=1, total=1)
+
+        task_ai = progress.add_task("Analisando com IA (Claude)...", total=None)
+        try:
+            viral_clips = analyze(transcription, config)
+        except RuntimeError as e:
+            progress.stop()
+            _err_console.print(Panel(str(e), title="[red]Erro na Análise IA[/red]", border_style="red"))
+            raise _PipelineError(str(e)) from e
+        viral_clips = viral_clips[: config.clip_count]
+        progress.update(task_ai, description="[green]Análise concluída[/green]", completed=1, total=1)
+
+        if not viral_clips:
+            progress.stop()
+            _console.print("[yellow]Nenhum trecho relevante identificado.[/yellow]")
+            return []
+
+        if config.dry_run:
+            progress.stop()
+            _show_clips_table(viral_clips, dry_run=True)
+            return []
+
+        task_cut = progress.add_task("Cortando clipes...", total=len(viral_clips))
+        for i, clip in enumerate(viral_clips):
+            try:
+                clip_path = cut_clip(video_path, clip, i, config)
+                clip_path, _, _ = _extract_cut_result(clip_path)
+                clip_paths.append(clip_path)
+            except Exception as e:
+                progress.stop()
+                _err_console.print(
+                    Panel(str(e), title="[red]Erro ao cortar clipe[/red]", border_style="red")
+                )
+                raise _PipelineError(str(e)) from e
+            preview = generate_clip_preview(video_path, clip, i, config)
+            preview_paths.append(preview.path if preview else None)
+            progress.advance(task_cut)
+        progress.update(task_cut, description="[green]Clipes cortados[/green]")
+
+        task_cap = progress.add_task("Adicionando legendas...", total=len(clip_paths))
+        for clip_path, clip in zip(clip_paths, viral_clips):
+            try:
+                add_captions(clip_path, transcription, clip, config)
+            except Exception as e:
+                progress.stop()
+                _err_console.print(
+                    Panel(str(e), title="[red]Erro ao adicionar legendas[/red]", border_style="red")
+                )
+                raise _PipelineError(str(e)) from e
+            progress.advance(task_cap)
+        progress.update(task_cap, description="[green]Legendas adicionadas[/green]")
+
+        if config.title_overlay:
+            task_ovl = progress.add_task("Adicionando sobreposição de título...", total=len(clip_paths))
+            for clip_path, clip in zip(clip_paths, viral_clips):
+                try:
+                    add_title_overlay(clip_path, clip, config)
+                except Exception as e:
+                    progress.stop()
+                    _err_console.print(
+                        Panel(str(e), title="[red]Erro ao adicionar title overlay[/red]", border_style="red")
+                    )
+                    raise _PipelineError(str(e)) from e
+                progress.advance(task_ovl)
+            progress.update(task_ovl, description="[green]Sobreposição de título adicionada[/green]")
+
+        output_dir = config.output_dir / video_path.stem
+        task_exp = progress.add_task("Exportando metadados...", total=len(viral_clips))
+        for i, clip in enumerate(viral_clips):
+            metadata_path = export_metadata(clip, i, output_dir)
+            metadata_paths.append(metadata_path)
+            progress.advance(task_exp)
+        progress.update(task_exp, description="[green]Metadados exportados[/green]")
+
+    clip_records: list[ClipRecord] = []
+    for clip, clip_path in zip(viral_clips, clip_paths):
+        clip_records.append(ClipRecord(
+            title=clip.title,
+            start_time=clip.start_time,
+            end_time=clip.end_time,
+            clip_path=clip_path,
+            thumbnail_path=None,
+            approved=True,
+            description=clip.description,
+            hashtags=clip.hashtags,
+            captions_applied=True,
+        ))
+
+    if not skip_review:
+        clip_records = review_clips(viral_clips, clip_records, config.cut_mode)
+
+    if upload:
+        try:
+            upload_clips(
+                clips=list(zip(clip_paths, metadata_paths)),
+                platforms=platforms or list(_SUPPORTED_PLATFORMS),
+                token_dir=_default_token_dir(),
+                clips_filter=config.clips,
+            )
+        except Exception as e:
+            _err_console.print(
+                Panel(str(e), title="[red]Erro de Upload[/red]", border_style="red")
+            )
+
+    return clip_records
 
 
 @app.command()
@@ -282,6 +450,7 @@ def run(
         raise typer.Exit(code=1)
 
     try:
+        auth_config = _resolve_cli_yt_dlp_auth_config()
         config = PipelineConfig(
             clip_count=resolved_clip_count,
             subtitle_style=style,  # type: ignore[arg-type]
@@ -301,134 +470,20 @@ def run(
         )
         raise typer.Exit(code=1)
 
-    progress = Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        TimeElapsedColumn(),
-        console=_console,
-    )
-
-    with progress:
-        # Step 1: Download
-        task_dl = progress.add_task("Baixando vídeo...", total=None)
-        try:
-            video_path = download_video(source, config.output_dir / "downloads")
-        except VideoDownloadError as e:
-            progress.stop()
-            _err_console.print(Panel(str(e), title="[red]Erro de Download[/red]", border_style="red"))
-            raise typer.Exit(code=1)
-        except FileNotFoundError as e:
-            progress.stop()
-            _err_console.print(Panel(str(e), title="[red]Arquivo não encontrado[/red]", border_style="red"))
-            raise typer.Exit(code=1)
-        progress.update(task_dl, description="[green]Download concluído[/green]", completed=1, total=1)
-
-        # Step 2: Transcribe
-        task_tr = progress.add_task("Transcrevendo áudio...", total=None)
-        try:
-            transcription = transcribe(video_path, config)
-        except RuntimeError as e:
-            progress.stop()
-            _err_console.print(Panel(str(e), title="[red]Erro de Transcrição[/red]", border_style="red"))
-            raise typer.Exit(code=1)
-        progress.update(task_tr, description="[green]Transcrição concluída[/green]", completed=1, total=1)
-
-        # Step 3: Analyze with AI
-        task_ai = progress.add_task("Analisando com IA (Claude)...", total=None)
-        try:
-            viral_clips = analyze(transcription, config)
-        except RuntimeError as e:
-            progress.stop()
-            _err_console.print(Panel(str(e), title="[red]Erro na Análise IA[/red]", border_style="red"))
-            raise typer.Exit(code=1)
-        viral_clips = viral_clips[: config.clip_count]
-        progress.update(task_ai, description="[green]Análise concluída[/green]", completed=1, total=1)
-
-        if dry_run:
-            progress.stop()
-            _show_clips_table(viral_clips, dry_run=True)
-            return
-
-        # Step 4: Cut clips and generate previews
-        clip_paths: list[Path] = []
-        preview_paths: list[Optional[Path]] = []
-        task_cut = progress.add_task("Cortando clipes...", total=len(viral_clips))
-        for i, clip in enumerate(viral_clips):
-            try:
-                clip_path = cut_clip(video_path, clip, i, config)
-                clip_paths.append(clip_path)
-            except Exception as e:
-                progress.stop()
-                _err_console.print(
-                    Panel(str(e), title="[red]Erro ao cortar clipe[/red]", border_style="red")
-                )
-                raise typer.Exit(code=1)
-            preview = generate_clip_preview(video_path, clip, i, config)
-            preview_paths.append(preview.path if preview else None)
-            progress.advance(task_cut)
-        progress.update(task_cut, description="[green]Clipes cortados[/green]")
-
-        # Step 5: Add captions
-        task_cap = progress.add_task("Adicionando legendas...", total=len(clip_paths))
-        for clip_path, clip in zip(clip_paths, viral_clips):
-            try:
-                add_captions(clip_path, transcription, clip, config)
-            except Exception as e:
-                progress.stop()
-                _err_console.print(
-                    Panel(str(e), title="[red]Erro ao adicionar legendas[/red]", border_style="red")
-                )
-                raise typer.Exit(code=1)
-            progress.advance(task_cap)
-        progress.update(task_cap, description="[green]Legendas adicionadas[/green]")
-
-        # Step 5.5: Add title overlay (opt-in)
-        if config.title_overlay:
-            task_ovl = progress.add_task("Adicionando sobreposição de título...", total=len(clip_paths))
-            for clip_path, clip in zip(clip_paths, viral_clips):
-                try:
-                    add_title_overlay(clip_path, clip, config)
-                except Exception as e:
-                    progress.stop()
-                    _err_console.print(
-                        Panel(str(e), title="[red]Erro ao adicionar title overlay[/red]", border_style="red")
-                    )
-                    raise typer.Exit(code=1)
-                progress.advance(task_ovl)
-            progress.update(task_ovl, description="[green]Sobreposição de título adicionada[/green]")
-
-        # Step 6: Export metadata
-        output_dir = config.output_dir / video_path.stem
-        task_exp = progress.add_task("Exportando metadados...", total=len(viral_clips))
-        metadata_paths: list[Path] = []
-        for i, clip in enumerate(viral_clips):
-            metadata_path = export_metadata(clip, i, output_dir)
-            metadata_paths.append(metadata_path)
-            progress.advance(task_exp)
-        progress.update(task_exp, description="[green]Metadados exportados[/green]")
-
-    if upload and upload_clips_raw and upload_clips_raw.strip().lower() not in ("", "all"):
-        logger.warning(
-            "O valor de --clips (%s) é ignorado quando o seletor interativo está ativo.", upload_clips_raw
+    try:
+        clip_records = _run_single_source_pipeline(
+            source,
+            config,
+            skip_review=True,
+            upload=upload,
+            platforms=selected_platforms,
+            auth_config=auth_config,
         )
+    except _PipelineError:
+        raise typer.Exit(code=1)
 
-    clips_filter = prompt_clip_selection(viral_clips, clip_paths) if config.upload else None
-
-    if config.upload:
-        try:
-            upload_clips(
-                clips=list(zip(clip_paths, metadata_paths)),
-                platforms=config.platforms,
-                token_dir=_default_token_dir(),
-                clips_filter=clips_filter,
-            )
-        except Exception as e:
-            _err_console.print(
-                Panel(str(e), title="[red]Erro de Upload[/red]", border_style="red")
-            )
-            raise typer.Exit(code=1)
-
-    _show_clips_table(viral_clips, clip_paths=clip_paths, preview_paths=preview_paths)
+    if clip_records:
+        _show_records_table(clip_records)
 
 
 @app_auth.command("login")
@@ -805,6 +860,7 @@ def run_flow_a(
     skip_review: bool = False,
     upload: bool = False,
     platforms: list[str] | None = None,
+    auth_config: YtDlpAuthConfig | None = None,
 ) -> SessionData | None:
     """Fluxo A: cortes longos para YouTube (paisagem 16:9)."""
     progress = Progress(
@@ -817,7 +873,10 @@ def run_flow_a(
     with progress:
         task_dl = progress.add_task("Baixando vídeo...", total=None)
         try:
-            video_path = download_video(source, config.output_dir / "downloads")
+            if auth_config is None:
+                video_path = download_video(source, config.output_dir / "downloads")
+            else:
+                video_path = download_video(source, config.output_dir / "downloads", auth_config=auth_config)
         except (VideoDownloadError, FileNotFoundError) as e:
             progress.stop()
             _err_console.print(Panel(str(e), title="[red]Erro de Download[/red]", border_style="red"))
@@ -1108,6 +1167,7 @@ def run_flow_c(
     skip_review: bool = False,
     upload: bool = False,
     platforms: list[str] | None = None,
+    auth_config: YtDlpAuthConfig | None = None,
 ) -> None:
     """Fluxo C: vídeos curtos diretamente do vídeo original (9:16 para redes sociais)."""
     progress = Progress(
@@ -1120,7 +1180,10 @@ def run_flow_c(
     with progress:
         task_dl = progress.add_task("Baixando vídeo...", total=None)
         try:
-            video_path = download_video(source, config.output_dir / "downloads")
+            if auth_config is None:
+                video_path = download_video(source, config.output_dir / "downloads")
+            else:
+                video_path = download_video(source, config.output_dir / "downloads", auth_config=auth_config)
         except (VideoDownloadError, FileNotFoundError) as e:
             progress.stop()
             _err_console.print(Panel(str(e), title="[red]Erro de Download[/red]", border_style="red"))
@@ -1316,10 +1379,9 @@ def offer_flow_b(
         except KeyboardInterrupt:
             _console.print("[yellow]Fluxo B cancelado.[/yellow]")
             return
-        run_flow_b(
-            session=session,
-            selected_clips=approved_clips,
-            config=config,
+        _run_social_from_clips(
+            approved_clips,
+            config,
             skip_review=skip_review,
             upload=upload,
             platforms=platforms,
@@ -1337,10 +1399,9 @@ def offer_flow_b(
         _console.print("[dim]Nenhum corte selecionado para o Fluxo B.[/dim]")
         return
 
-    run_flow_b(
-        session=session,
-        selected_clips=selected,
-        config=config,
+    _run_social_from_clips(
+        selected,
+        config,
         skip_review=skip_review,
         upload=upload,
         platforms=platforms,
@@ -1409,7 +1470,40 @@ def _handle_history(*, skip_review: bool, upload: bool, platforms_raw: str) -> N
     )
 
 
-def _run_auto_pipeline(source: str, config: PipelineConfig) -> None:
+def _run_social_from_clips(
+    clip_records: list[ClipRecord],
+    config: PipelineConfig,
+    *,
+    skip_review: bool = False,
+    upload: bool = False,
+    platforms: list[str] | None = None,
+) -> list[ClipRecord]:
+    """Processa cada clipe aprovado do Flow A como fonte local no pipeline social."""
+    social_config = _build_social_pipeline_config(config)
+    all_records: list[ClipRecord] = []
+
+    for clip_record in clip_records:
+        logger.info("Pipeline social iniciado para clipe local: %s", clip_record.clip_path.name)
+        try:
+            records = _run_single_source_pipeline(
+                str(clip_record.clip_path),
+                social_config,
+                skip_review=skip_review,
+                upload=upload,
+                platforms=platforms,
+            )
+            all_records.extend(records)
+        except _PipelineError as e:
+            logger.warning("Falha no pipeline social para '%s': %s", clip_record.clip_path.name, e)
+
+    return all_records
+
+
+def _run_auto_pipeline(
+    source: str,
+    config: PipelineConfig,
+    auth_config: YtDlpAuthConfig | None = None,
+) -> None:
     """Orquestrador do modo automático: Fluxo A → Fluxo B → resumo consolidado."""
     logger.info("Pipeline automático iniciado: %s", source)
     _console.print(Panel(
@@ -1426,6 +1520,7 @@ def _run_auto_pipeline(source: str, config: PipelineConfig) -> None:
         skip_review=True,
         upload=True,
         platforms=["youtube"],
+        auth_config=auth_config,
     )
     if session is None:
         logger.warning("Pipeline automático encerrado: run_flow_a retornou None")
@@ -1434,11 +1529,9 @@ def _run_auto_pipeline(source: str, config: PipelineConfig) -> None:
     yt_records = list(session.clips)
     approved = [c for c in session.clips if c.approved]
 
-    social_config = _build_social_pipeline_config(config, output_dir=config.output_dir)
-    social_records = run_flow_b(
-        session=session,
-        selected_clips=approved,
-        config=social_config,
+    social_records = _run_social_from_clips(
+        approved,
+        config,
         skip_review=True,
         upload=True,
         platforms=["tiktok", "instagram"],
@@ -1469,6 +1562,8 @@ def cuts(
         _handle_history(skip_review=skip_review, upload=upload, platforms_raw=platforms_raw)
         return
 
+    auth_config = _resolve_cli_yt_dlp_auth_config()
+
     # RF-01: seleção do modo como primeira etapa
     mode: CutMode = _select_cut_mode()
 
@@ -1486,7 +1581,10 @@ def cuts(
 
     _console.print(f"\nBuscando metadados: [bold]{url}[/bold]")
     try:
-        video_meta = fetch_metadata(url)
+        if auth_config is None:
+            video_meta = fetch_metadata(url)
+        else:
+            video_meta = fetch_metadata(url, auth_config=auth_config)
     except VideoMetadataError as e:
         _err_console.print(Panel(str(e), title="[red]Erro ao acessar vídeo[/red]", border_style="red"))
         raise typer.Exit(code=1)
@@ -1524,7 +1622,7 @@ def cuts(
         execution_mode = _select_execution_mode() if _can_prompt_interactively() else "manual"
 
         if execution_mode == "auto":
-            _run_auto_pipeline(url, config)
+            _run_auto_pipeline(url, config, auth_config=auth_config)
         else:
             # Fluxo A + oferta de Fluxo B (path manual existente)
             session = run_flow_a(
@@ -1533,6 +1631,7 @@ def cuts(
                 skip_review=skip_review,
                 upload=upload,
                 platforms=selected_platforms,
+                auth_config=auth_config,
             )
             if session:
                 offer_flow_b(
@@ -1550,4 +1649,5 @@ def cuts(
             skip_review=skip_review,
             upload=upload,
             platforms=selected_platforms,
+            auth_config=auth_config,
         )

@@ -21,6 +21,7 @@ def make_clips() -> tuple[list[ViralClip], list[Path]]:
             description="desc",
             hashtags=["#a"],
             thumbnail_idea="idea",
+            thumbnail_text="MOMENTO IMPACTANTE",
         ),
         ViralClip(
             title="Clip B",
@@ -31,6 +32,7 @@ def make_clips() -> tuple[list[ViralClip], list[Path]]:
             description="desc",
             hashtags=["#b"],
             thumbnail_idea="idea",
+            thumbnail_text="MOMENTO IMPACTANTE",
         ),
         ViralClip(
             title="Clip C",
@@ -41,6 +43,7 @@ def make_clips() -> tuple[list[ViralClip], list[Path]]:
             description="desc",
             hashtags=["#c"],
             thumbnail_idea="idea",
+            thumbnail_text="MOMENTO IMPACTANTE",
         ),
     ]
     paths = [Path(f"clip_{i}.mp4") for i in range(len(clips))]

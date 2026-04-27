@@ -66,6 +66,7 @@ _MOCK_CLIP_DATA = {
     "description": "Descrição de teste",
     "hashtags": ["#teste"],
     "thumbnail_idea": "Frame de teste",
+    "thumbnail_text": "MOMENTO IMPACTANTE",
 }
 
 
@@ -235,6 +236,7 @@ class TestPipelineVerticalFill:
             description="desc",
             hashtags=["#test"],
             thumbnail_idea="thumb",
+            thumbnail_text="MOMENTO IMPACTANTE",
         )
 
     def test_pipeline_clip_resolution_1080x1920(self, vf_config, video_path, mock_clip):

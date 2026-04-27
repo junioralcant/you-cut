@@ -58,6 +58,7 @@ def mock_viral_clip_youtube():
         description="Deep dive into tech innovation",
         hashtags=["#tech", "#innovation"],
         thumbnail_idea="Speaker with confident expression discussing technology",
+        thumbnail_text="MOMENTO IMPACTANTE",
         cut_mode="youtube",
     )
 
@@ -710,7 +711,7 @@ class TestAutoModePipeline:
 
         with (
             patch("youcut.cli.run_flow_a", side_effect=fake_flow_a),
-            patch("youcut.cli.run_flow_b", return_value=[]),
+            patch("youcut.cli._run_social_from_clips", return_value=[]),
             patch("youcut.cli._show_consolidated_summary"),
         ):
             from youcut.cli import _run_auto_pipeline
@@ -721,60 +722,54 @@ class TestAutoModePipeline:
         assert flow_a_calls[0]["upload"] is True
         assert flow_a_calls[0]["platforms"] == ["youtube"]
 
-    def test_run_flow_b_called_with_skip_review_and_social_platforms(self, auto_config, fake_session):
-        """run_flow_b is called with skip_review=True, upload=True, platforms=['tiktok', 'instagram']."""
-        flow_b_calls = []
+    def test_social_pipeline_called_with_skip_review_and_social_platforms(self, auto_config, fake_session):
+        """_run_social_from_clips is called with skip_review=True, upload=True, platforms=['tiktok', 'instagram']."""
+        social_calls = []
 
-        def fake_flow_b(session, selected_clips, config, *, skip_review, upload, platforms, **kw):
-            flow_b_calls.append(
+        def fake_run_social(clip_records, config, *, skip_review, upload, platforms, **kw):
+            social_calls.append(
                 dict(
                     skip_review=skip_review,
                     upload=upload,
                     platforms=platforms,
-                    cut_mode=config.cut_mode,
-                    subtitle_style=config.subtitle_style,
-                    max_clips=config.max_clips,
                 )
             )
             return []
 
         with (
             patch("youcut.cli.run_flow_a", return_value=fake_session),
-            patch("youcut.cli.run_flow_b", side_effect=fake_flow_b),
+            patch("youcut.cli._run_social_from_clips", side_effect=fake_run_social),
             patch("youcut.cli._show_consolidated_summary"),
         ):
             from youcut.cli import _run_auto_pipeline
             _run_auto_pipeline("https://youtube.com/watch?v=test", auto_config)
 
-        assert len(flow_b_calls) == 1
-        assert flow_b_calls[0]["skip_review"] is True
-        assert flow_b_calls[0]["upload"] is True
-        assert set(flow_b_calls[0]["platforms"]) == {"tiktok", "instagram"}
-        assert flow_b_calls[0]["cut_mode"] == "social"
-        assert flow_b_calls[0]["subtitle_style"] == "word"
-        assert flow_b_calls[0]["max_clips"] == auto_config.max_clips
+        assert len(social_calls) == 1
+        assert social_calls[0]["skip_review"] is True
+        assert social_calls[0]["upload"] is True
+        assert set(social_calls[0]["platforms"]) == {"tiktok", "instagram"}
 
     def test_run_flow_b_not_called_when_flow_a_returns_none(self, auto_config):
-        """If run_flow_a returns None, run_flow_b is never called."""
-        flow_b_calls = []
+        """If run_flow_a returns None, _run_social_from_clips is never called."""
+        social_calls = []
 
         with (
             patch("youcut.cli.run_flow_a", return_value=None),
-            patch("youcut.cli.run_flow_b", side_effect=lambda *a, **kw: flow_b_calls.append(True)),
+            patch("youcut.cli._run_social_from_clips", side_effect=lambda *a, **kw: social_calls.append(True)),
             patch("youcut.cli._show_consolidated_summary"),
         ):
             from youcut.cli import _run_auto_pipeline
             _run_auto_pipeline("https://youtube.com/watch?v=test", auto_config)
 
-        assert len(flow_b_calls) == 0
+        assert len(social_calls) == 0
 
     def test_show_consolidated_summary_called_even_when_flow_b_empty(self, auto_config, fake_session):
-        """_show_consolidated_summary is called even when run_flow_b returns []."""
+        """_show_consolidated_summary is called even when _run_social_from_clips returns []."""
         summary_calls = []
 
         with (
             patch("youcut.cli.run_flow_a", return_value=fake_session),
-            patch("youcut.cli.run_flow_b", return_value=[]),
+            patch("youcut.cli._run_social_from_clips", return_value=[]),
             patch("youcut.cli._show_consolidated_summary", side_effect=lambda yt, soc: summary_calls.append((yt, soc))),
         ):
             from youcut.cli import _run_auto_pipeline
@@ -790,7 +785,7 @@ class TestAutoModePipeline:
 
         with (
             patch("youcut.cli.run_flow_a", return_value=fake_session),
-            patch("youcut.cli.run_flow_b", return_value=[]),
+            patch("youcut.cli._run_social_from_clips", return_value=[]),
             patch("youcut.cli._show_consolidated_summary", side_effect=lambda yt, soc: summary_calls.append((yt, soc))),
         ):
             from youcut.cli import _run_auto_pipeline
@@ -799,8 +794,8 @@ class TestAutoModePipeline:
         yt_records, _ = summary_calls[0]
         assert yt_records == fake_session.clips
 
-    def test_flow_b_receives_only_approved_clips(self, auto_config, fake_session):
-        """run_flow_b receives only approved clips from the session (gate relaxado)."""
+    def test_social_pipeline_receives_only_approved_clips(self, auto_config, fake_session):
+        """_run_social_from_clips receives only approved clips from the session."""
         rejected = ClipRecord(
             title="Rejected",
             start_time=300.0,
@@ -811,19 +806,19 @@ class TestAutoModePipeline:
         )
         fake_session.clips.append(rejected)
 
-        flow_b_clips = []
+        social_clips = []
 
-        def fake_flow_b(session, selected_clips, config, **kw):
-            flow_b_clips.extend(selected_clips)
+        def fake_run_social(clip_records, config, **kw):
+            social_clips.extend(clip_records)
             return []
 
         with (
             patch("youcut.cli.run_flow_a", return_value=fake_session),
-            patch("youcut.cli.run_flow_b", side_effect=fake_flow_b),
+            patch("youcut.cli._run_social_from_clips", side_effect=fake_run_social),
             patch("youcut.cli._show_consolidated_summary"),
         ):
             from youcut.cli import _run_auto_pipeline
             _run_auto_pipeline("https://youtube.com/watch?v=test", auto_config)
 
-        assert all(c.approved for c in flow_b_clips)
-        assert len(flow_b_clips) == 1
+        assert all(c.approved for c in social_clips)
+        assert len(social_clips) == 1

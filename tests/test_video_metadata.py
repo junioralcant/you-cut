@@ -5,6 +5,7 @@ import yt_dlp
 
 from youcut.models import VideoMetadata
 from youcut.video_metadata import VideoMetadataError, fetch_metadata
+from youcut.yt_dlp_auth import YtDlpAuthConfig
 
 VALID_INFO = {
     "title": "My Live Stream",
@@ -109,3 +110,27 @@ def test_fetch_metadata_normalizes_shell_escaped_url(mock_ydl_cls):
 
     mock_ydl.extract_info.assert_called_once_with("https://www.youtube.com/watch?v=abc123", download=False)
     assert result.url == "https://www.youtube.com/watch?v=abc123"
+
+
+@patch("youcut.video_metadata.yt_dlp.YoutubeDL")
+def test_fetch_metadata_passes_cookies_from_browser(mock_ydl_cls):
+    mock_ctx, _ = _make_ydl_mock(VALID_INFO)
+    mock_ydl_cls.return_value = mock_ctx
+
+    fetch_metadata(URL, auth_config=YtDlpAuthConfig(browser="chrome"))
+
+    call_opts = mock_ydl_cls.call_args[0][0]
+    assert call_opts["cookiesfrombrowser"] == ("chrome",)
+
+
+@patch("youcut.video_metadata.yt_dlp.YoutubeDL")
+def test_fetch_metadata_appends_cookie_hint_on_bot_check(mock_ydl_cls):
+    mock_ydl = MagicMock()
+    mock_ydl.extract_info.side_effect = yt_dlp.utils.DownloadError("Sign in to confirm you're not a bot")
+    mock_ctx = MagicMock()
+    mock_ctx.__enter__ = MagicMock(return_value=mock_ydl)
+    mock_ctx.__exit__ = MagicMock(return_value=False)
+    mock_ydl_cls.return_value = mock_ctx
+
+    with pytest.raises(VideoMetadataError, match="YOUCUT_COOKIES_FROM_BROWSER=chrome"):
+        fetch_metadata(URL)

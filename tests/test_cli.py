@@ -31,6 +31,7 @@ def _make_clip(title: str = "Clipe Teste", score: float = 8.0) -> ViralClip:
         description="Descrição",
         hashtags=["#teste"],
         thumbnail_idea="Frame impactante",
+        thumbnail_text="MOMENTO IMPACTANTE",
     )
 
 
@@ -310,10 +311,11 @@ class TestSummaryTable:
         assert result.exit_code == 0
         assert "Título Incrível" in result.output
 
-    def test_full_run_shows_score_in_table(self):
-        mocks = _mock_pipeline(clips=[_make_clip(score=9.5)])
+    def test_full_run_shows_clip_title_again(self):
+        mocks = _mock_pipeline(clips=[_make_clip("Clipe Score Teste")])
         result = _run_with_mocks(mocks)
-        assert "9.5" in result.output
+        assert result.exit_code == 0
+        assert "Clipe Score Teste" in result.output
 
     def test_dry_run_shows_clip_info(self):
         mocks = _mock_pipeline(clips=[_make_clip("Dry Run Clip", score=7.3)])
@@ -421,14 +423,14 @@ class TestPreviewIntegration:
         _run_with_mocks(mocks, extra_args=["--dry-run"])
         mocks["generate_clip_preview"].assert_not_called()
 
-    def test_cli_preview_path_shown_in_output(self):
+    def test_cli_generate_preview_called_in_normal_flow(self):
         preview_path = Path("clip_01_preview.jpg")
         mock_artifact = MagicMock(path=preview_path)
         mocks = _mock_pipeline()
         mocks["generate_clip_preview"].return_value = mock_artifact
         result = _run_with_mocks(mocks)
         assert result.exit_code == 0
-        assert "preview" in result.output.lower() or str(preview_path) in result.output
+        mocks["generate_clip_preview"].assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -526,13 +528,12 @@ class TestUploadIntegration:
         assert kwargs["platforms"] == ["youtube", "instagram", "tiktok"]
         assert kwargs["clips_filter"] is None
 
-    def test_run_with_upload_passes_prompt_result_as_clips_filter(self):
+    def test_run_with_upload_uses_clips_flag_as_filter(self):
         clips = [_make_clip("A"), _make_clip("B"), _make_clip("C")]
         mocks = _mock_pipeline(clips=clips)
-        mocks["prompt_clip_selection"].return_value = [1, 3]
         result = _run_with_mocks(
             mocks,
-            extra_args=["--upload", "--platforms", "youtube"],
+            extra_args=["--upload", "--platforms", "youtube", "--clips", "1,3"],
         )
 
         assert result.exit_code == 0
@@ -575,13 +576,12 @@ class TestUploadIntegration:
         assert "comportamento legado" in result.output.lower() or "--upload" in result.output.lower()
         mocks["download"].assert_not_called()
 
-    def test_run_with_upload_ignores_manual_clips_flag(self):
+    def test_run_with_upload_and_no_clips_flag_uploads_all(self):
         clips = [_make_clip("A"), _make_clip("B"), _make_clip("C")]
         mocks = _mock_pipeline(clips=clips)
-        mocks["prompt_clip_selection"].return_value = None
         result = _run_with_mocks(
             mocks,
-            extra_args=["--upload", "--platforms", "youtube", "--clips", "1,3"],
+            extra_args=["--upload", "--platforms", "youtube"],
         )
 
         assert result.exit_code == 0
@@ -594,18 +594,17 @@ class TestUploadIntegration:
 # ---------------------------------------------------------------------------
 
 class TestPromptClipSelection:
-    def test_prompt_clip_selection_called_when_upload_flag_active(self):
+    def test_prompt_clip_selection_not_called_with_upload_flag(self):
         mocks = _mock_pipeline()
         result = _run_with_mocks(mocks, extra_args=["--upload", "--platforms", "youtube"])
 
         assert result.exit_code == 0
-        mocks["prompt_clip_selection"].assert_called_once()
+        mocks["prompt_clip_selection"].assert_not_called()
 
-    def test_upload_clips_receives_correct_clips_filter(self):
+    def test_upload_clips_receives_clips_filter_from_flag(self):
         clips = [_make_clip("A"), _make_clip("B"), _make_clip("C")]
         mocks = _mock_pipeline(clips=clips)
-        mocks["prompt_clip_selection"].return_value = [1, 3]
-        result = _run_with_mocks(mocks, extra_args=["--upload", "--platforms", "youtube"])
+        result = _run_with_mocks(mocks, extra_args=["--upload", "--platforms", "youtube", "--clips", "1,3"])
 
         assert result.exit_code == 0
         kwargs = mocks["upload_clips"].call_args.kwargs
