@@ -691,3 +691,43 @@ class TestAuthCommands:
         assert "youtube" in result.output
         assert "instagram" in result.output
         assert "tiktok" in result.output
+
+
+def test_cli_thumbnail_text_flag_passed_to_flow_a_config():
+    fake_session = MagicMock()
+    with (
+        patch("shutil.which", return_value="/usr/bin/ffmpeg"),
+        patch("youcut.cli._resolve_cli_yt_dlp_auth_config", return_value=None),
+        patch("youcut.cli._select_cut_mode", return_value="youtube"),
+        patch("youcut.cli.normalize_video_url", return_value="video.mp4"),
+        patch("youcut.cli.fetch_metadata", return_value=MagicMock(title="Video", duration_seconds=120.0)),
+        patch("youcut.cli.questionary.confirm", return_value=MagicMock(ask=MagicMock(return_value=True))),
+        patch("youcut.cli._can_prompt_interactively", return_value=False),
+        patch("youcut.cli.run_flow_a", return_value=fake_session) as mock_flow_a,
+        patch("youcut.cli.offer_flow_b"),
+    ):
+        result = runner.invoke(app, ["cuts", "video.mp4", "--max-clips", "1", "--thumbnail-text", "TITLE"], env=API_ENV)
+
+    assert result.exit_code == 0
+    config = mock_flow_a.call_args.args[1]
+    assert config.thumbnail_text == "TITLE"
+
+
+def test_cli_without_thumbnail_text_uses_empty_default():
+    fake_session = MagicMock()
+    with (
+        patch("shutil.which", return_value="/usr/bin/ffmpeg"),
+        patch("youcut.cli._resolve_cli_yt_dlp_auth_config", return_value=None),
+        patch("youcut.cli._select_cut_mode", return_value="youtube"),
+        patch("youcut.cli.normalize_video_url", return_value="video.mp4"),
+        patch("youcut.cli.fetch_metadata", return_value=MagicMock(title="Video", duration_seconds=120.0)),
+        patch("youcut.cli.questionary.confirm", return_value=MagicMock(ask=MagicMock(return_value=True))),
+        patch("youcut.cli._can_prompt_interactively", return_value=False),
+        patch("youcut.cli.run_flow_a", return_value=fake_session) as mock_flow_a,
+        patch("youcut.cli.offer_flow_b"),
+    ):
+        result = runner.invoke(app, ["cuts", "video.mp4", "--max-clips", "1"], env=API_ENV)
+
+    assert result.exit_code == 0
+    config = mock_flow_a.call_args.args[1]
+    assert config.thumbnail_text == ""

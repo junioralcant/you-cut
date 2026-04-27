@@ -7,6 +7,7 @@ from pydantic import ValidationError
 from youcut.models import (
     ClipRecord,
     SessionData,
+    ThumbnailFrameResult,
     TranscriptionResult,
     TranscriptionSegment,
     VideoMetadata,
@@ -33,6 +34,55 @@ def test_viral_clip_creation():
     assert clip.start_time == 30.0
     assert clip.end_time == 75.0
     assert len(clip.hashtags) == 3
+
+
+def test_viral_clip_default_thumbnail_text_is_empty():
+    clip = ViralClip(
+        title="Momento Incrível",
+        reason="Gancho forte no início com curiosidade",
+        viral_score=9.2,
+        start_time=30.0,
+        end_time=75.0,
+        description="Descrição completa do clipe para redes sociais",
+        hashtags=["#viral"],
+        thumbnail_idea="Frame com expressão de surpresa no segundo 35",
+    )
+    assert clip.thumbnail_text == ""
+
+
+def test_thumbnail_frame_result_default_methods_are_local(tmp_path):
+    result = ThumbnailFrameResult(
+        frame_timestamp=1.0,
+        frame_score=0.5,
+        segmentation_applied=False,
+        output_path=tmp_path / "thumb.png",
+    )
+    assert result.selection_method == "local"
+    assert result.generation_method == "local"
+
+
+def test_thumbnail_frame_result_accepts_ai_methods(tmp_path):
+    result = ThumbnailFrameResult(
+        frame_timestamp=1.0,
+        frame_score=0.5,
+        segmentation_applied=False,
+        output_path=tmp_path / "thumb.png",
+        selection_method="ai",
+        generation_method="ai",
+    )
+    assert result.selection_method == "ai"
+    assert result.generation_method == "ai"
+
+
+def test_thumbnail_frame_result_invalid_method_raises(tmp_path):
+    with pytest.raises(ValidationError):
+        ThumbnailFrameResult(
+            frame_timestamp=1.0,
+            frame_score=0.5,
+            segmentation_applied=False,
+            output_path=tmp_path / "thumb.png",
+            selection_method="invalid",
+        )
 
 
 def test_viral_clip_score_too_high_raises():

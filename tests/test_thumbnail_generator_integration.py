@@ -1,30 +1,41 @@
-"""Testes de integração para generate_thumbnail() com vídeo sintético.
-
-Usa FFmpeg para gerar um .mp4 de cor sólida e verifica que a thumbnail resultante
-atende às especificações do YouTube: 1280×720 px, PNG, ≤ 2 MB.
-"""
-
+import base64
+import io
 import subprocess
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
 import pytest
+from PIL import Image
 
 from youcut.models import ViralClip
+from youcut.thumbnail_generator import _build_thumbnail_result, generate_thumbnail
 
 
 def _generate_synthetic_video(output: Path, duration: float = 10.0) -> Path:
     cmd = [
-        "ffmpeg", "-y",
-        "-f", "lavfi", "-i", f"color=c=blue:size=1280x720:rate=25:duration={duration}",
-        "-f", "lavfi", "-i", f"sine=frequency=440:duration={duration}",
-        "-c:v", "libx264", "-c:a", "aac", "-shortest",
+        "ffmpeg",
+        "-y",
+        "-f",
+        "lavfi",
+        "-i",
+        f"color=c=blue:size=1280x720:rate=25:duration={duration}",
+        "-f",
+        "lavfi",
+        "-i",
+        f"sine=frequency=440:duration={duration}",
+        "-c:v",
+        "libx264",
+        "-c:a",
+        "aac",
+        "-shortest",
         str(output),
     ]
     subprocess.run(cmd, check=True, capture_output=True)
     return output
 
 
-def _make_clip() -> ViralClip:
+def _make_clip(thumbnail_text: str = "") -> ViralClip:
     return ViralClip(
         title="Momento Viral Incrível",
         reason="High energy",
@@ -34,9 +45,16 @@ def _make_clip() -> ViralClip:
         description="Descrição do clipe.",
         hashtags=["#youtube"],
         thumbnail_idea="Host explaining excitedly",
-        thumbnail_text="MOMENTO IMPACTANTE",
+        thumbnail_text=thumbnail_text,
         cut_mode="youtube",
     )
+
+
+def _make_png(width: int = 1536, height: int = 1024, color: tuple[int, int, int] = (0, 90, 255)) -> bytes:
+    img = Image.new("RGB", (width, height), color=color)
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
 
 
 @pytest.fixture
@@ -48,46 +66,93 @@ def synthetic_video(tmp_path):
 
 
 @pytest.mark.integration
-def test_generate_thumbnail_end_to_end(synthetic_video, tmp_path):
-    from PIL import Image
+def test_generate_thumbnail_local_path_produces_valid_png(synthetic_video, tmp_path):
+    clip = _make_clip("")
+    output_path = tmp_path / "local.png"
 
-    from youcut.thumbnail_generator import generate_thumbnail
+    result = _build_thumbnail_result(clip, synthetic_video, output_path, None)
 
-    clip = _make_clip()
-    output_dir = tmp_path / "output"
-    result = generate_thumbnail(clip, output_dir, clip_index=1, clip_path=synthetic_video)
-
-    assert result.exists(), f"Thumbnail não foi criada em {result}"
-    assert result.suffix == ".png"
-    assert result.name == "clip_01.png"
-
-    with Image.open(result) as img:
-        assert img.size == (1280, 720), f"Dimensões incorretas: {img.size}"
+    assert result.selection_method == "local"
+    assert result.generation_method == "local"
+    with Image.open(output_path) as img:
+        assert img.size == (1280, 720)
         assert img.format == "PNG"
 
-    size_bytes = result.stat().st_size
-    assert size_bytes <= 2 * 1024 * 1024, f"Thumbnail muito grande: {size_bytes} bytes"
+
+@pytest.mark.integration
+def test_generate_thumbnail_ai_path_produces_valid_png(synthetic_video, tmp_path):
+    clip = _make_clip("")
+    output_path = tmp_path / "ai.png"
+    anth_response = SimpleNamespace(content=[SimpleNamespace(text='{"selected_index": 0, "reason": "bright"}')])
+    anthropic_client = MagicMock()
+    anthropic_client.with_options.return_value = anthropic_client
+    anthropic_client.messages.create.return_value = anth_response
+
+    b64_image = base64.b64encode(_make_png()).decode("utf-8")
+    openai_response = SimpleNamespace(data=[SimpleNamespace(b64_json=b64_image)])
+    openai_client = MagicMock()
+    openai_client.with_options.return_value = openai_client
+    openai_client.images.edit.return_value = openai_response
+
+    with patch("youcut.thumbnail_generator._build_ai_clients", return_value=(anthropic_client, openai_client)):
+        result = _build_thumbnail_result(clip, synthetic_video, output_path, SimpleNamespace())
+
+    assert result.selection_method == "ai"
+    assert result.generation_method == "ai"
+    with Image.open(output_path) as img:
+        assert img.size == (1280, 720)
 
 
 @pytest.mark.integration
-def test_generate_thumbnail_output_path(synthetic_video, tmp_path):
-    from youcut.thumbnail_generator import generate_thumbnail
+def test_generate_thumbnail_ai_selection_fallback(synthetic_video, tmp_path):
+    clip = _make_clip("")
+    output_path = tmp_path / "selection_fallback.png"
+    anthropic_client = MagicMock()
+    anthropic_client.with_options.return_value = anthropic_client
+    anthropic_client.messages.create.side_effect = RuntimeError("boom")
 
-    clip = _make_clip()
+    b64_image = base64.b64encode(_make_png()).decode("utf-8")
+    openai_response = SimpleNamespace(data=[SimpleNamespace(b64_json=b64_image)])
+    openai_client = MagicMock()
+    openai_client.with_options.return_value = openai_client
+    openai_client.images.edit.return_value = openai_response
+
+    with patch("youcut.thumbnail_generator._build_ai_clients", return_value=(anthropic_client, openai_client)):
+        result = _build_thumbnail_result(clip, synthetic_video, output_path, SimpleNamespace())
+
+    assert result.selection_method == "local"
+    assert result.generation_method == "ai"
+
+
+@pytest.mark.integration
+def test_generate_thumbnail_ai_generation_fallback(synthetic_video, tmp_path):
+    clip = _make_clip("")
+    output_path = tmp_path / "generation_fallback.png"
+    anth_response = SimpleNamespace(content=[SimpleNamespace(text='{"selected_index": 0, "reason": "bright"}')])
+    anthropic_client = MagicMock()
+    anthropic_client.with_options.return_value = anthropic_client
+    anthropic_client.messages.create.return_value = anth_response
+
+    openai_client = MagicMock()
+    openai_client.with_options.return_value = openai_client
+    openai_client.images.edit.side_effect = RuntimeError("429")
+
+    with patch("youcut.thumbnail_generator._build_ai_clients", return_value=(anthropic_client, openai_client)):
+        result = _build_thumbnail_result(clip, synthetic_video, output_path, SimpleNamespace())
+
+    assert result.selection_method == "ai"
+    assert result.generation_method == "local"
+    with Image.open(output_path) as img:
+        assert img.size == (1280, 720)
+
+
+@pytest.mark.integration
+def test_generate_thumbnail_no_text_by_default(synthetic_video, tmp_path):
+    clip = _make_clip("")
     output_dir = tmp_path / "output"
-    result = generate_thumbnail(clip, output_dir, clip_index=3, clip_path=synthetic_video)
 
-    assert result == output_dir / "thumbnails" / "clip_03.png"
+    result = generate_thumbnail(clip, output_dir, clip_index=1, clip_path=synthetic_video)
 
-
-@pytest.mark.integration
-def test_generate_thumbnail_creates_thumbnails_dir(synthetic_video, tmp_path):
-    from youcut.thumbnail_generator import generate_thumbnail
-
-    clip = _make_clip()
-    output_dir = tmp_path / "new_output"
-    assert not output_dir.exists()
-
-    generate_thumbnail(clip, output_dir, clip_index=0, clip_path=synthetic_video)
-
-    assert (output_dir / "thumbnails").is_dir()
+    with Image.open(result) as img:
+        assert img.size == (1280, 720)
+        assert img.getpixel((0, 0)) == img.getpixel((640, 360)) == img.getpixel((1279, 719))

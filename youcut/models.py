@@ -107,7 +107,7 @@ class ViralClip(BaseModel):
     description: str
     hashtags: list[str]
     thumbnail_idea: str
-    thumbnail_text: str
+    thumbnail_text: str = ""
     cut_mode: CutMode = "social"
 
     @field_validator("viral_score")
@@ -123,3 +123,5 @@ class ThumbnailFrameResult(BaseModel):
     frame_score: float
     segmentation_applied: bool
     output_path: Path
+    selection_method: Literal["ai", "local"] = "local"
+    generation_method: Literal["ai", "local"] = "local"

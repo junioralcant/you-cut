@@ -35,6 +35,7 @@ class PipelineConfig(BaseSettings):
     face_tracking: bool = False
     huggingface_token: str | None = None
     face_detection_confidence: float = 0.5
+    thumbnail_text: str = ""
 
     @model_validator(mode="after")
     def validate_api_key_present(self) -> "PipelineConfig":

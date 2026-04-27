@@ -1,23 +1,30 @@
+import base64
 import io
+import json
+import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
 from PIL import Image
 
-from youcut.models import ClipRecord, ViralClip
+from youcut.models import ThumbnailFrameResult, ViralClip
 from youcut.thumbnail_generator import (
-    _apply_frame_processing,
     _compose_text_overlay,
+    _extract_frames_candidates,
+    _generate_thumbnail_via_ai,
+    _generate_thumbnail_via_ai_result,
     _resize_to_youtube_format,
     _select_best_face_frame,
+    _select_best_frame_via_ai,
+    _select_best_frame_via_ai_result,
+    _build_thumbnail_result,
     generate_thumbnail,
 )
 
-_FAKE_PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 100
 
-
-def _make_clip() -> ViralClip:
+def _make_clip(thumbnail_text: str = "MOMENTO IMPACTANTE") -> ViralClip:
     return ViralClip(
         title="Momento Viral Incrível",
         reason="High energy",
@@ -27,16 +34,20 @@ def _make_clip() -> ViralClip:
         description="The host explains the main topic.",
         hashtags=["#youtube"],
         thumbnail_idea="Host explaining excitedly with charts in background",
-        thumbnail_text="MOMENTO IMPACTANTE",
+        thumbnail_text=thumbnail_text,
         cut_mode="youtube",
     )
 
 
-def _make_pil_png(width: int = 640, height: int = 480) -> bytes:
-    img = Image.new("RGB", (width, height), color=(100, 150, 200))
+def _make_png(width: int = 640, height: int = 480, color: tuple[int, int, int] = (100, 150, 200)) -> bytes:
+    img = Image.new("RGB", (width, height), color=color)
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     return buf.getvalue()
+
+
+def _make_completed_process(stdout: bytes | str, returncode: int = 0) -> subprocess.CompletedProcess:
+    return subprocess.CompletedProcess(args=["ffmpeg"], returncode=returncode, stdout=stdout, stderr=b"")
 
 
 def _make_mediapipe_detection(score: float, xmin: float, ymin: float, width: float, height: float):
@@ -62,7 +73,7 @@ def _make_cv2_mock():
     return cv2
 
 
-def _make_numpy_mock(png_bytes: bytes):
+def _make_numpy_mock():
     np = MagicMock()
     np.frombuffer.return_value = MagicMock()
     np.uint8 = MagicMock()
@@ -75,233 +86,150 @@ def _import_raising_for_mediapipe(name, *args, **kwargs):
     return __import__(name, *args, **kwargs)
 
 
-# ---------------------------------------------------------------------------
-# generate_thumbnail() — assinatura nova (sem OpenAI)
-# ---------------------------------------------------------------------------
-
-@patch("youcut.thumbnail_generator._resize_to_youtube_format")
-@patch("youcut.thumbnail_generator._compose_text_overlay")
-@patch("youcut.thumbnail_generator._apply_frame_processing")
-@patch("youcut.thumbnail_generator._select_best_face_frame")
-def test_generate_thumbnail_returns_correct_path(
-    mock_select, mock_process, mock_compose, mock_resize, tmp_path
-):
-    png_bytes = _make_pil_png()
-    mock_select.return_value = png_bytes
-    pil_img = Image.new("RGB", (640, 480), color=(50, 100, 150))
-    mock_process.return_value = pil_img
-    mock_compose.return_value = pil_img
-
+def test_generate_thumbnail_returns_correct_path(tmp_path):
     clip = _make_clip()
     fake_mp4 = tmp_path / "clip.mp4"
     fake_mp4.write_bytes(b"fake")
 
-    result = generate_thumbnail(clip, tmp_path, clip_index=3, clip_path=fake_mp4)
+    result_model = ThumbnailFrameResult(
+        frame_timestamp=1.0,
+        frame_score=0.9,
+        segmentation_applied=False,
+        output_path=tmp_path / "thumbnails" / "clip_03.png",
+    )
 
-    expected = tmp_path / "thumbnails" / "clip_03.png"
-    assert result == expected
+    with patch("youcut.thumbnail_generator._build_thumbnail_result", return_value=result_model):
+        result = generate_thumbnail(clip, tmp_path, clip_index=3, clip_path=fake_mp4)
 
-
-@patch("youcut.thumbnail_generator._resize_to_youtube_format")
-@patch("youcut.thumbnail_generator._compose_text_overlay")
-@patch("youcut.thumbnail_generator._apply_frame_processing")
-@patch("youcut.thumbnail_generator._select_best_face_frame")
-def test_generate_thumbnail_creates_thumbnails_dir(
-    mock_select, mock_process, mock_compose, mock_resize, tmp_path
-):
-    png_bytes = _make_pil_png()
-    mock_select.return_value = png_bytes
-    pil_img = Image.new("RGB", (640, 480))
-    mock_process.return_value = pil_img
-    mock_compose.return_value = pil_img
-
-    clip = _make_clip()
-    output_dir = tmp_path / "video_stem"
-    fake_mp4 = output_dir / "clip.mp4"
-    fake_mp4.parent.mkdir(parents=True, exist_ok=True)
-    fake_mp4.write_bytes(b"fake")
-
-    assert not (output_dir / "thumbnails").exists()
-    generate_thumbnail(clip, output_dir, clip_index=1, clip_path=fake_mp4)
-    assert (output_dir / "thumbnails").exists()
+    assert result == tmp_path / "thumbnails" / "clip_03.png"
 
 
-@patch("youcut.thumbnail_generator._resize_to_youtube_format")
-@patch("youcut.thumbnail_generator._compose_text_overlay")
-@patch("youcut.thumbnail_generator._apply_frame_processing")
-@patch("youcut.thumbnail_generator._select_best_face_frame")
-def test_generate_thumbnail_calls_pipeline_in_order(
-    mock_select, mock_process, mock_compose, mock_resize, tmp_path
-):
-    call_order = []
-
-    png_bytes = _make_pil_png()
-    pil_img = Image.new("RGB", (640, 480))
-
-    mock_select.side_effect = lambda *a, **k: (call_order.append("select"), png_bytes)[1]
-    mock_process.side_effect = lambda *a, **k: (call_order.append("process"), pil_img)[1]
-    mock_compose.side_effect = lambda *a, **k: (call_order.append("compose"), pil_img)[1]
-    mock_resize.side_effect = lambda *a, **k: call_order.append("resize")
-
+def test_generate_thumbnail_creates_thumbnails_dir(tmp_path):
     clip = _make_clip()
     fake_mp4 = tmp_path / "clip.mp4"
     fake_mp4.write_bytes(b"fake")
 
-    generate_thumbnail(clip, tmp_path, clip_index=0, clip_path=fake_mp4)
+    result_model = ThumbnailFrameResult(
+        frame_timestamp=1.0,
+        frame_score=0.9,
+        segmentation_applied=False,
+        output_path=tmp_path / "thumbnails" / "clip_01.png",
+    )
 
-    assert call_order == ["select", "process", "compose", "resize"]
+    with patch("youcut.thumbnail_generator._build_thumbnail_result", return_value=result_model):
+        generate_thumbnail(clip, tmp_path, clip_index=1, clip_path=fake_mp4)
+
+    assert (tmp_path / "thumbnails").exists()
 
 
 def test_generate_thumbnail_raises_when_clip_path_missing(tmp_path):
     clip = _make_clip()
-    with pytest.raises((ValueError, Exception)):
+    with pytest.raises(ValueError):
         generate_thumbnail(clip, tmp_path, clip_index=0, clip_path=None)
 
 
-# ---------------------------------------------------------------------------
-# _apply_frame_processing() — Pillow fallback (sem MediaPipe/cv2)
-# ---------------------------------------------------------------------------
+def test_build_thumbnail_result_without_config_uses_local_path(tmp_path):
+    clip = _make_clip("")
+    clip_path = tmp_path / "clip.mp4"
+    clip_path.write_bytes(b"fake")
+    output_path = tmp_path / "thumb.png"
+    frame_bytes = _make_png()
+    thumbnail_bytes = _make_png(1280, 720)
+
+    with (
+        patch("youcut.thumbnail_generator._extract_frames_candidates", return_value=[(1.5, frame_bytes)]),
+        patch("youcut.thumbnail_generator._build_ai_clients", return_value=(None, None)),
+        patch("youcut.thumbnail_generator._select_best_local_candidate", return_value=(1.5, frame_bytes, 0.42)),
+        patch("youcut.thumbnail_generator._generate_thumbnail_via_ai_result", return_value=(thumbnail_bytes, "local")),
+    ):
+        result = _build_thumbnail_result(clip, clip_path, output_path, None)
+
+    assert result.selection_method == "local"
+    assert result.generation_method == "local"
+    assert output_path.exists()
+
+
+def test_build_thumbnail_result_with_config_calls_ai_stages(tmp_path):
+    clip = _make_clip("")
+    clip_path = tmp_path / "clip.mp4"
+    clip_path.write_bytes(b"fake")
+    output_path = tmp_path / "thumb.png"
+    frame_bytes = _make_png()
+    thumbnail_bytes = _make_png(1280, 720)
+
+    ai_selection = patch("youcut.thumbnail_generator._select_best_frame_via_ai_result", return_value=(2.5, frame_bytes, "ai", 1.0))
+    ai_generation = patch("youcut.thumbnail_generator._generate_thumbnail_via_ai_result", return_value=(thumbnail_bytes, "ai"))
+    with (
+        patch("youcut.thumbnail_generator._extract_frames_candidates", return_value=[(2.5, frame_bytes)]),
+        patch("youcut.thumbnail_generator._build_ai_clients", return_value=(object(), object())),
+        ai_selection as mock_selection,
+        ai_generation as mock_generation,
+    ):
+        result = _build_thumbnail_result(clip, clip_path, output_path, SimpleNamespace())
+
+    mock_selection.assert_called_once()
+    mock_generation.assert_called_once()
+    assert result.selection_method == "ai"
+    assert result.generation_method == "ai"
+
+
+def test_build_thumbnail_result_methods_populated(tmp_path):
+    clip = _make_clip("")
+    clip_path = tmp_path / "clip.mp4"
+    clip_path.write_bytes(b"fake")
+    output_path = tmp_path / "thumb.png"
+    frame_bytes = _make_png()
+    thumbnail_bytes = _make_png(1280, 720)
+
+    with (
+        patch("youcut.thumbnail_generator._extract_frames_candidates", return_value=[(3.0, frame_bytes)]),
+        patch("youcut.thumbnail_generator._build_ai_clients", return_value=(None, None)),
+        patch("youcut.thumbnail_generator._select_best_local_candidate", return_value=(3.0, frame_bytes, 0.33)),
+        patch("youcut.thumbnail_generator._generate_thumbnail_via_ai_result", return_value=(thumbnail_bytes, "local")),
+    ):
+        result = _build_thumbnail_result(clip, clip_path, output_path, None)
+
+    assert result.selection_method in {"ai", "local"}
+    assert result.generation_method in {"ai", "local"}
+
+
+def test_compose_text_overlay_empty_returns_original(caplog):
+    img = Image.new("RGB", (1280, 720), color=(50, 100, 150))
+    original_bytes = img.tobytes()
+
+    with caplog.at_level("DEBUG"):
+        result = _compose_text_overlay(img, "")
+
+    assert result.tobytes() == original_bytes
+    assert "thumbnail_text vazio" in caplog.text
+
+
+def test_compose_text_overlay_short_text_within_7_percent():
+    img = Image.new("RGB", (1280, 720), color=(50, 100, 150))
+    result = _compose_text_overlay(img, "CHOQUE")
+    assert result.size == img.size
+    assert result.tobytes() != img.tobytes()
+
+
+def test_compose_text_overlay_long_text_reduces_font(caplog):
+    img = Image.new("RGB", (1280, 720), color=(50, 100, 150))
+    long_title = "UMA FRASE MUITO LONGA COM MUITAS PALAVRAS PARA FORCAR AJUSTE DE FONTE NA THUMBNAIL"
+
+    with caplog.at_level("WARNING"):
+        result = _compose_text_overlay(img, long_title)
+
+    assert result.size == (1280, 720)
+    assert "original_size" in caplog.text
+    assert "adjusted_size" in caplog.text
+
 
 def test_apply_frame_processing_returns_pil_image():
-    frame_bytes = _make_pil_png(640, 480)
+    frame_bytes = _make_png(640, 480)
+    from youcut.thumbnail_generator import _apply_frame_processing
+
     result = _apply_frame_processing(frame_bytes)
     assert isinstance(result, Image.Image)
 
-
-def test_apply_frame_processing_preserves_dimensions():
-    frame_bytes = _make_pil_png(800, 600)
-    result = _apply_frame_processing(frame_bytes)
-    assert result.size == (800, 600)
-
-
-def test_apply_frame_processing_returns_rgb():
-    frame_bytes = _make_pil_png(320, 240)
-    result = _apply_frame_processing(frame_bytes)
-    assert result.mode == "RGB"
-
-
-# ---------------------------------------------------------------------------
-# _compose_text_overlay()
-# ---------------------------------------------------------------------------
-
-def test_compose_text_overlay_returns_pil_image():
-    img = Image.new("RGB", (1280, 720), color=(50, 100, 150))
-    result = _compose_text_overlay(img, "Título do Episódio")
-    assert isinstance(result, Image.Image)
-
-
-def test_compose_text_overlay_preserves_dimensions():
-    img = Image.new("RGB", (1280, 720))
-    result = _compose_text_overlay(img, "Momento Incrível")
-    assert result.size == (1280, 720)
-
-
-def test_compose_text_overlay_empty_title_does_not_raise():
-    img = Image.new("RGB", (1280, 720))
-    result = _compose_text_overlay(img, "")
-    assert result.size == (1280, 720)
-
-
-def test_compose_text_overlay_long_title_does_not_raise():
-    img = Image.new("RGB", (1280, 720))
-    long_title = "Uma frase muito longa que tem muitas palavras e não deve quebrar tudo de forma alguma"
-    result = _compose_text_overlay(img, long_title)
-    assert result.size == (1280, 720)
-
-
-def test_compose_text_overlay_does_not_modify_original():
-    img = Image.new("RGB", (1280, 720), color=(255, 0, 0))
-    original_pixel = img.getpixel((0, 0))
-    _compose_text_overlay(img, "Título")
-    assert img.getpixel((0, 0)) == original_pixel
-
-
-# ---------------------------------------------------------------------------
-# _select_best_face_frame() — frame selection logic
-# ---------------------------------------------------------------------------
-
-@patch("youcut.thumbnail_generator._extract_frame")
-@patch("youcut.thumbnail_generator._extract_frame_at")
-@patch("youcut.thumbnail_generator._get_video_duration")
-def test_select_best_face_frame_returns_highest_score_frame(
-    mock_duration, mock_extract_at, mock_extract_fallback, tmp_path
-):
-    import sys
-    fake_mp = MagicMock()
-    detector_instance = MagicMock()
-
-    def make_result(detections):
-        r = MagicMock()
-        r.detections = detections
-        return r
-
-    good_det = _make_mediapipe_detection(score=0.95, xmin=0.35, ymin=0.25, width=0.30, height=0.50)
-    bad_result = make_result([])
-    good_result = make_result([good_det])
-
-    call_count = [0]
-
-    def process_side_effect(rgb):
-        call_count[0] += 1
-        if call_count[0] == 5:
-            return good_result
-        return bad_result
-
-    detector_instance.process.side_effect = process_side_effect
-    fake_mp.solutions.face_detection.FaceDetection.return_value = detector_instance
-
-    fake_frame_bytes = [_FAKE_PNG] * 10
-    mock_extract_at.side_effect = fake_frame_bytes
-    mock_duration.return_value = 60.0
-
-    with patch.dict(sys.modules, {"mediapipe": fake_mp, "cv2": _make_cv2_mock(), "numpy": _make_numpy_mock(_FAKE_PNG)}):
-        result = _select_best_face_frame(tmp_path / "clip.mp4")
-
-    assert result == _FAKE_PNG
-    mock_extract_fallback.assert_not_called()
-
-
-@patch("youcut.thumbnail_generator._extract_frame")
-@patch("youcut.thumbnail_generator._extract_frame_at")
-@patch("youcut.thumbnail_generator._get_video_duration")
-def test_select_best_face_frame_falls_back_when_no_face_detected(
-    mock_duration, mock_extract_at, mock_extract_fallback, tmp_path
-):
-    import sys
-    fake_mp = MagicMock()
-    detector_instance = MagicMock()
-    no_face_result = MagicMock()
-    no_face_result.detections = []
-    detector_instance.process.return_value = no_face_result
-    fake_mp.solutions.face_detection.FaceDetection.return_value = detector_instance
-
-    mock_extract_at.return_value = _FAKE_PNG
-    mock_duration.return_value = 30.0
-    mock_extract_fallback.return_value = b"fallback_frame"
-
-    with patch.dict(sys.modules, {"mediapipe": fake_mp, "cv2": _make_cv2_mock(), "numpy": _make_numpy_mock(_FAKE_PNG)}):
-        result = _select_best_face_frame(tmp_path / "clip.mp4")
-
-    assert result == b"fallback_frame"
-    mock_extract_fallback.assert_called_once()
-
-
-@patch("youcut.thumbnail_generator._extract_frame")
-def test_select_best_face_frame_falls_back_when_mediapipe_not_installed(
-    mock_extract_fallback, tmp_path
-):
-    mock_extract_fallback.return_value = b"fallback_no_mp"
-
-    with patch("builtins.__import__", side_effect=_import_raising_for_mediapipe):
-        result = _select_best_face_frame(tmp_path / "clip.mp4")
-
-    assert result == b"fallback_no_mp"
-    mock_extract_fallback.assert_called()
-
-
-# ---------------------------------------------------------------------------
-# _resize_to_youtube_format() — 1280x720 output
-# ---------------------------------------------------------------------------
 
 def test_resize_to_youtube_format_produces_correct_dimensions(tmp_path):
     img = Image.new("RGB", (1792, 1024), color=(255, 0, 0))
@@ -314,12 +242,259 @@ def test_resize_to_youtube_format_produces_correct_dimensions(tmp_path):
         assert result.size == (1280, 720)
 
 
-def test_resize_to_youtube_format_preserves_png_format(tmp_path):
-    img = Image.new("RGB", (800, 600), color=(0, 255, 0))
-    img_path = tmp_path / "thumb.png"
-    img.save(img_path, format="PNG")
+def test_extract_frames_candidates_returns_correct_count(tmp_path):
+    video_path = tmp_path / "clip.mp4"
+    video_path.write_bytes(b"fake")
+    frame_png = _make_png(1600, 900)
 
-    _resize_to_youtube_format(img_path)
+    def run_side_effect(cmd, **kwargs):
+        if cmd[0] == "ffprobe":
+            return _make_completed_process(json.dumps({"format": {"duration": "60.0"}}))
+        return _make_completed_process(frame_png)
 
-    with Image.open(img_path) as result:
-        assert result.format == "PNG"
+    with patch("youcut.thumbnail_generator.subprocess.run", side_effect=run_side_effect):
+        result = _extract_frames_candidates(video_path, n_frames=10)
+
+    assert len(result) == 10
+
+
+def test_extract_frames_candidates_timestamps_within_range(tmp_path):
+    video_path = tmp_path / "clip.mp4"
+    video_path.write_bytes(b"fake")
+    frame_png = _make_png()
+
+    def run_side_effect(cmd, **kwargs):
+        if cmd[0] == "ffprobe":
+            return _make_completed_process(json.dumps({"format": {"duration": "100.0"}}))
+        return _make_completed_process(frame_png)
+
+    with patch("youcut.thumbnail_generator.subprocess.run", side_effect=run_side_effect):
+        result = _extract_frames_candidates(video_path, n_frames=5)
+
+    assert all(5.0 <= ts <= 95.0 for ts, _ in result)
+
+
+@pytest.mark.parametrize(("requested", "expected"), [(0, 5), (20, 15)])
+def test_extract_frames_candidates_clamps_n_frames(tmp_path, requested, expected):
+    video_path = tmp_path / "clip.mp4"
+    video_path.write_bytes(b"fake")
+    frame_png = _make_png()
+
+    def run_side_effect(cmd, **kwargs):
+        if cmd[0] == "ffprobe":
+            return _make_completed_process(json.dumps({"format": {"duration": "40.0"}}))
+        return _make_completed_process(frame_png)
+
+    with patch("youcut.thumbnail_generator.subprocess.run", side_effect=run_side_effect):
+        result = _extract_frames_candidates(video_path, n_frames=requested)
+
+    assert len(result) == expected
+
+
+def test_extract_frames_candidates_skips_failed_frame(tmp_path, caplog):
+    video_path = tmp_path / "clip.mp4"
+    video_path.write_bytes(b"fake")
+    frame_png = _make_png()
+    counter = {"frames": 0}
+
+    def run_side_effect(cmd, **kwargs):
+        if cmd[0] == "ffprobe":
+            return _make_completed_process(json.dumps({"format": {"duration": "40.0"}}))
+        counter["frames"] += 1
+        if counter["frames"] == 3:
+            raise subprocess.CalledProcessError(returncode=1, cmd=cmd)
+        return _make_completed_process(frame_png)
+
+    with patch("youcut.thumbnail_generator.subprocess.run", side_effect=run_side_effect), caplog.at_level("WARNING"):
+        result = _extract_frames_candidates(video_path, n_frames=5)
+
+    assert len(result) == 4
+    assert "Falha ao extrair frame candidato" in caplog.text
+
+
+def test_extract_frames_candidates_raises_if_all_fail(tmp_path):
+    video_path = tmp_path / "clip.mp4"
+    video_path.write_bytes(b"fake")
+
+    def run_side_effect(cmd, **kwargs):
+        if cmd[0] == "ffprobe":
+            return _make_completed_process(json.dumps({"format": {"duration": "40.0"}}))
+        raise subprocess.CalledProcessError(returncode=1, cmd=cmd)
+
+    with patch("youcut.thumbnail_generator.subprocess.run", side_effect=run_side_effect):
+        with pytest.raises(RuntimeError):
+            _extract_frames_candidates(video_path, n_frames=5)
+
+
+def test_select_best_frame_via_ai_returns_correct_frame():
+    frames = [(1.0, b"a"), (2.0, b"b"), (3.0, b"c")]
+    response = SimpleNamespace(content=[SimpleNamespace(text='{"selected_index": 2, "reason": "bright face"}')])
+    client = MagicMock()
+    client.with_options.return_value = client
+    client.messages.create.return_value = response
+
+    result = _select_best_frame_via_ai(frames, "Teste", client)
+
+    assert result == (3.0, b"c")
+
+
+def test_select_best_frame_via_ai_fallback_on_invalid_json(caplog):
+    frames = [(1.0, b"a"), (2.0, b"b")]
+    response = SimpleNamespace(content=[SimpleNamespace(text="sem json")])
+    client = MagicMock()
+    client.with_options.return_value = client
+    client.messages.create.return_value = response
+
+    with patch("youcut.thumbnail_generator._select_best_local_candidate", return_value=(1.0, b"a", 0.2)) as mock_local, caplog.at_level("WARNING"):
+        result = _select_best_frame_via_ai_result(frames, "Teste", client)
+
+    mock_local.assert_called_once()
+    assert result[2] == "local"
+    assert "Falha na seleção por IA" in caplog.text
+
+
+def test_select_best_frame_via_ai_fallback_on_timeout(caplog):
+    frames = [(1.0, b"a"), (2.0, b"b")]
+    client = MagicMock()
+    client.with_options.return_value = client
+    client.messages.create.side_effect = TimeoutError("timeout")
+
+    with patch("youcut.thumbnail_generator._select_best_local_candidate", return_value=(1.0, b"a", 0.2)), caplog.at_level("WARNING"):
+        result = _select_best_frame_via_ai_result(frames, "Teste", client)
+
+    assert result[2] == "local"
+    assert "timeout" in caplog.text
+
+
+def test_select_best_frame_via_ai_fallback_on_api_error(caplog):
+    frames = [(1.0, b"a"), (2.0, b"b")]
+    client = MagicMock()
+    client.with_options.return_value = client
+    client.messages.create.side_effect = RuntimeError("api error")
+
+    with patch("youcut.thumbnail_generator._select_best_local_candidate", return_value=(1.0, b"a", 0.2)), caplog.at_level("WARNING"):
+        result = _select_best_frame_via_ai_result(frames, "Teste", client)
+
+    assert result[2] == "local"
+    assert "api error" in caplog.text
+
+
+def test_select_best_frame_via_ai_logs_reason_on_success(caplog):
+    frames = [(1.0, b"a"), (2.0, b"b")]
+    response = SimpleNamespace(content=[SimpleNamespace(text='{"selected_index": 0, "reason": "bright face"}')])
+    client = MagicMock()
+    client.with_options.return_value = client
+    client.messages.create.return_value = response
+
+    with caplog.at_level("INFO"):
+        result = _select_best_frame_via_ai_result(frames, "Teste", client)
+
+    assert result[2] == "ai"
+    assert "bright face" in caplog.text
+
+
+def test_generate_thumbnail_via_ai_returns_correct_size():
+    input_png = _make_png(640, 360)
+    output_png = _make_png(1536, 1024)
+    b64_image = base64.b64encode(output_png).decode("utf-8")
+    response = SimpleNamespace(data=[SimpleNamespace(b64_json=b64_image)])
+    client = MagicMock()
+    client.with_options.return_value = client
+    client.images.edit.return_value = response
+
+    result = _generate_thumbnail_via_ai(input_png, "Teste", client)
+
+    with Image.open(io.BytesIO(result)) as img:
+        assert img.size == (1280, 720)
+
+
+def test_generate_thumbnail_via_ai_fallback_when_no_client(caplog):
+    input_png = _make_png(640, 360)
+
+    with patch("youcut.thumbnail_generator._render_local_thumbnail_bytes", return_value=_make_png(1280, 720)) as mock_local, caplog.at_level("WARNING"):
+        result, method = _generate_thumbnail_via_ai_result(input_png, "Teste", None)
+
+    mock_local.assert_called_once()
+    assert method == "local"
+    assert result
+    assert "Cliente OpenAI ausente" in caplog.text
+
+
+def test_generate_thumbnail_via_ai_fallback_on_timeout(caplog):
+    input_png = _make_png(640, 360)
+    client = MagicMock()
+    client.with_options.return_value = client
+    client.images.edit.side_effect = TimeoutError("timeout")
+
+    with patch("youcut.thumbnail_generator._render_local_thumbnail_bytes", return_value=_make_png(1280, 720)), caplog.at_level("WARNING"):
+        _, method = _generate_thumbnail_via_ai_result(input_png, "Teste", client)
+
+    assert method == "local"
+    assert "timeout" in caplog.text
+
+
+def test_generate_thumbnail_via_ai_fallback_on_http_error(caplog):
+    input_png = _make_png(640, 360)
+    client = MagicMock()
+    client.with_options.return_value = client
+    client.images.edit.side_effect = RuntimeError("429")
+
+    with patch("youcut.thumbnail_generator._render_local_thumbnail_bytes", return_value=_make_png(1280, 720)), caplog.at_level("WARNING"):
+        _, method = _generate_thumbnail_via_ai_result(input_png, "Teste", client)
+
+    assert method == "local"
+    assert "429" in caplog.text
+
+
+def test_generate_thumbnail_via_ai_logs_method_ai_on_success(caplog):
+    input_png = _make_png(640, 360)
+    output_png = _make_png(1536, 1024)
+    b64_image = base64.b64encode(output_png).decode("utf-8")
+    response = SimpleNamespace(data=[SimpleNamespace(b64_json=b64_image)])
+    client = MagicMock()
+    client.with_options.return_value = client
+    client.images.edit.return_value = response
+
+    with caplog.at_level("INFO"):
+        _, method = _generate_thumbnail_via_ai_result(input_png, "Teste", client)
+
+    assert method == "ai"
+    assert "method=ai" in caplog.text
+
+
+@patch("youcut.thumbnail_generator._extract_frame")
+def test_select_best_face_frame_falls_back_when_mediapipe_not_installed(mock_extract_fallback, tmp_path):
+    mock_extract_fallback.return_value = b"fallback_no_mp"
+    video_path = tmp_path / "clip.mp4"
+    video_path.write_bytes(b"fake")
+
+    with patch("builtins.__import__", side_effect=_import_raising_for_mediapipe):
+        result = _select_best_face_frame(video_path)
+
+    assert result == b"fallback_no_mp"
+
+
+@patch("youcut.thumbnail_generator._extract_frames_candidates")
+def test_select_best_face_frame_returns_highest_score_frame(mock_candidates, tmp_path):
+    import sys
+
+    fake_mp = MagicMock()
+    detector_instance = MagicMock()
+
+    def make_result(detections):
+        result = MagicMock()
+        result.detections = detections
+        return result
+
+    good_det = _make_mediapipe_detection(score=0.95, xmin=0.35, ymin=0.25, width=0.30, height=0.50)
+    detector_instance.process.side_effect = [
+        make_result([]),
+        make_result([good_det]),
+    ]
+    fake_mp.solutions.face_detection.FaceDetection.return_value = detector_instance
+    mock_candidates.return_value = [(1.0, b"a"), (2.0, b"b")]
+
+    with patch.dict(sys.modules, {"mediapipe": fake_mp, "cv2": _make_cv2_mock(), "numpy": _make_numpy_mock()}):
+        result = _select_best_face_frame(tmp_path / "clip.mp4", n_samples=2)
+
+    assert result == b"b"

@@ -403,6 +403,11 @@ def run(
     title_overlay: bool = typer.Option(
         False, "--title-overlay", help="Queimar título do clipe nos primeiros 5 segundos do vídeo"
     ),
+    thumbnail_text: str = typer.Option(
+        "",
+        "--thumbnail-text",
+        help="Texto opcional para sobrepor na thumbnail; vazio por padrão",
+    ),
     upload: bool = typer.Option(False, "--upload", help="Faz upload dos clipes ao final do pipeline"),
     platforms_raw: str = typer.Option(
         "all",
@@ -419,6 +424,7 @@ def run(
 ) -> None:
     """Processa um vídeo longo e gera clipes virais prontos para publicação."""
     _configure_logging(log_level, log_file)
+    thumbnail_text_value = thumbnail_text if isinstance(thumbnail_text, str) else ""
 
     _check_ffmpeg()
 
@@ -456,6 +462,7 @@ def run(
             subtitle_style=style,  # type: ignore[arg-type]
             dry_run=dry_run,
             title_overlay=title_overlay,
+            thumbnail_text=thumbnail_text_value,
             upload=upload,
             platforms=selected_platforms,
             clips=clips_filter,
@@ -928,8 +935,9 @@ def run_flow_a(
         task_th = progress.add_task("Gerando thumbnails...", total=len(viral_clips))
         for i, clip in enumerate(viral_clips):
             try:
+                clip.thumbnail_text = config.thumbnail_text
                 clip_path_for_thumb = clip_paths[i] if i < len(clip_paths) else None
-                thumb = generate_thumbnail(clip, output_dir, i, clip_path=clip_path_for_thumb)
+                thumb = generate_thumbnail(clip, output_dir, i, clip_path=clip_path_for_thumb, config=config)
                 thumbnail_paths.append(thumb)
             except Exception as e:
                 logger.warning("Falha ao gerar thumbnail %d: %s", i + 1, e)
@@ -1548,6 +1556,11 @@ def cuts(
     max_clips: Optional[int] = typer.Option(None, "--max-clips", "-n", help="Número máximo de clipes"),
     skip_review: bool = typer.Option(False, "--skip-review", help="Publicar diretamente sem revisão"),
     upload: bool = typer.Option(False, "--upload", help="Fazer upload dos clipes ao final"),
+    thumbnail_text: str = typer.Option(
+        "",
+        "--thumbnail-text",
+        help="Texto opcional para sobrepor na thumbnail do Flow A",
+    ),
     platforms_raw: str = typer.Option(
         "all", "--platforms", help="Plataformas de upload: youtube, instagram, tiktok ou all"
     ),
@@ -1556,6 +1569,7 @@ def cuts(
 ) -> None:
     """Gera cortes inteligentes (YouTube 16:9 ou redes sociais 9:16) com revisão e publicação."""
     _configure_logging(log_level, log_file)
+    thumbnail_text_value = thumbnail_text if isinstance(thumbnail_text, str) else ""
     _check_ffmpeg()
 
     if history:
@@ -1613,7 +1627,7 @@ def cuts(
 
     try:
         selected_platforms = _parse_platforms(platforms_raw) if upload else list(_SUPPORTED_PLATFORMS)
-        config = PipelineConfig(cut_mode=mode, max_clips=resolved_max_clips)
+        config = PipelineConfig(cut_mode=mode, max_clips=resolved_max_clips, thumbnail_text=thumbnail_text_value)
     except Exception as e:
         _err_console.print(Panel(str(e), title="[red]Erro de Configuração[/red]", border_style="red"))
         raise typer.Exit(code=1)
