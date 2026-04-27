@@ -1639,12 +1639,13 @@ def cuts(
             _run_auto_pipeline(url, config, auth_config=auth_config)
         else:
             # Fluxo A + oferta de Fluxo B (path manual existente)
+            yt_only = [p for p in selected_platforms if p == "youtube"]
             session = run_flow_a(
                 url,
                 config,
                 skip_review=skip_review,
                 upload=upload,
-                platforms=selected_platforms,
+                platforms=yt_only,
                 auth_config=auth_config,
             )
             if session:
