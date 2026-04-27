@@ -2,6 +2,7 @@ import hashlib
 import logging
 import math
 import os
+import subprocess
 import secrets
 import time
 import webbrowser
@@ -30,10 +31,70 @@ _AUTH_TIMEOUT = 300.0
 _ACCESS_TOKEN_SKEW = timedelta(seconds=30)
 _PKCE_VERIFIER_LENGTH = 43
 _PKCE_VERIFIER_CHARSET = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._"
+_POST_MODE_DRAFT = "draft"
+_POST_MODE_DIRECT = "direct"
+_VALID_POST_MODES = frozenset({_POST_MODE_DRAFT, _POST_MODE_DIRECT})
+_VALID_PRIVACY_LEVELS = frozenset(
+    {"PUBLIC_TO_EVERYONE", "MUTUAL_FOLLOW_FRIENDS", "FOLLOWER_OF_CREATOR", "SELF_ONLY"}
+)
 
 
 def _utcnow() -> datetime:
     return datetime.now(UTC)
+
+
+def _parse_env_bool(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"{name} must be a boolean value (true/false).")
+
+
+def _extract_response_error(payload: object) -> str | None:
+    if not isinstance(payload, dict):
+        return None
+    error = payload.get("error")
+    if not isinstance(error, dict):
+        return None
+    code = error.get("code")
+    if code in (None, "", "ok"):
+        return None
+    message = error.get("message") or "unknown error"
+    return f"{code}: {message}"
+
+
+def _get_video_duration_seconds(video_path: Path) -> float | None:
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+                str(video_path),
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        return None
+
+    output = result.stdout.strip()
+    if not output:
+        return None
+    try:
+        return float(output)
+    except ValueError:
+        return None
 
 
 class _OAuthCallbackHandler(BaseHTTPRequestHandler):
@@ -73,12 +134,47 @@ class TikTokUploader(Uploader):
         transport: httpx.BaseTransport | None = None,
         polling_interval: float = _POLLING_INTERVAL,
         polling_max_retries: int = _POLLING_MAX_RETRIES,
+        post_mode: str | None = None,
+        privacy_level: str | None = None,
+        disable_comment: bool | None = None,
+        disable_duet: bool | None = None,
+        disable_stitch: bool | None = None,
     ) -> None:
         super().__init__(token_dir)
         self._access_token: str | None = None
         self._transport = transport
         self._polling_interval = polling_interval
         self._polling_max_retries = polling_max_retries
+        resolved_post_mode = (post_mode or os.getenv("TIKTOK_POST_MODE", _POST_MODE_DRAFT)).strip().lower()
+        if resolved_post_mode not in _VALID_POST_MODES:
+            raise ValueError(
+                f"TIKTOK_POST_MODE must be one of: {', '.join(sorted(_VALID_POST_MODES))}."
+            )
+        resolved_privacy_level = (
+            privacy_level or os.getenv("TIKTOK_PRIVACY_LEVEL", "SELF_ONLY")
+        ).strip().upper()
+        if resolved_privacy_level not in _VALID_PRIVACY_LEVELS:
+            raise ValueError(
+                "TIKTOK_PRIVACY_LEVEL must be one of: "
+                f"{', '.join(sorted(_VALID_PRIVACY_LEVELS))}."
+            )
+        self._post_mode = resolved_post_mode
+        self._privacy_level = resolved_privacy_level
+        self._disable_comment = (
+            _parse_env_bool("TIKTOK_DISABLE_COMMENT", False)
+            if disable_comment is None
+            else disable_comment
+        )
+        self._disable_duet = (
+            _parse_env_bool("TIKTOK_DISABLE_DUET", False)
+            if disable_duet is None
+            else disable_duet
+        )
+        self._disable_stitch = (
+            _parse_env_bool("TIKTOK_DISABLE_STITCH", False)
+            if disable_stitch is None
+            else disable_stitch
+        )
 
     @property
     def platform_name(self) -> str:
@@ -159,7 +255,7 @@ class TikTokUploader(Uploader):
         query = urlencode(
             {
                 "client_key": client_key,
-                "scope": "user.info.basic,video.upload",
+                "scope": self._oauth_scope(),
                 "response_type": "code",
                 "redirect_uri": redirect_uri,
                 "state": state,
@@ -168,6 +264,26 @@ class TikTokUploader(Uploader):
             }
         )
         return f"{_AUTH_URL}?{query}"
+
+    def _oauth_scope(self) -> str:
+        scopes = ["user.info.basic", "video.upload"]
+        if self._post_mode == _POST_MODE_DIRECT:
+            scopes.append("video.publish")
+        return ",".join(scopes)
+
+    def _token_has_required_scope(self, token: dict) -> bool:
+        if self._post_mode != _POST_MODE_DIRECT:
+            return True
+        granted = token.get("scope") or token.get("scopes")
+        if not granted:
+            return True
+        if isinstance(granted, str):
+            granted_scopes = {scope.strip() for scope in granted.replace(",", " ").split() if scope.strip()}
+        elif isinstance(granted, list):
+            granted_scopes = {str(scope).strip() for scope in granted if str(scope).strip()}
+        else:
+            return True
+        return "video.publish" in granted_scopes
 
     def _exchange_code_for_token(
         self,
@@ -316,7 +432,7 @@ class TikTokUploader(Uploader):
 
     def authenticate(self) -> None:
         token = self._load_saved_token()
-        if token and self._token_is_valid(token):
+        if token and self._token_is_valid(token) and self._token_has_required_scope(token):
             logger.debug("Reusing saved TikTok credentials.")
             self._set_active_token(token)
             return
@@ -338,43 +454,125 @@ class TikTokUploader(Uploader):
         self._set_active_token(token)
         logger.info("TikTok OAuth credentials saved.")
 
+    def _request_json(
+        self,
+        *,
+        method: str,
+        url: str,
+        json_body: dict | None = None,
+    ) -> tuple[dict | None, str | None]:
+        with self._make_client() as client:
+            try:
+                resp = client.request(
+                    method,
+                    url,
+                    headers={
+                        "Authorization": f"Bearer {self._access_token}",
+                        "Content-Type": "application/json; charset=UTF-8",
+                    },
+                    json=json_body,
+                )
+            except httpx.HTTPError as exc:
+                return None, str(exc)
+
+        try:
+            payload = resp.json()
+        except ValueError:
+            payload = None
+
+        api_error = _extract_response_error(payload)
+        if resp.status_code != 200:
+            message = api_error or resp.text
+            return None, f"HTTP {resp.status_code}: {message}"
+        if api_error:
+            return None, api_error
+        if not isinstance(payload, dict):
+            return None, f"Unexpected response body: {resp.text}"
+        return payload, None
+
+    def _fetch_creator_info(self) -> tuple[dict | None, str | None]:
+        payload, error = self._request_json(
+            method="POST",
+            url=f"{_API_BASE}/v2/post/publish/creator_info/query/",
+        )
+        if error:
+            return None, f"Creator info query failed: {error}"
+        data = payload.get("data")
+        if not isinstance(data, dict):
+            return None, "Creator info query failed: response missing data payload."
+        return data, None
+
+    def _build_post_info(self, metadata: ClipMetadata, creator_info: dict, video_path: Path) -> dict:
+        privacy_options = creator_info.get("privacy_level_options")
+        if not isinstance(privacy_options, list) or not privacy_options:
+            raise RuntimeError("TikTok creator info did not return privacy_level_options.")
+        if self._privacy_level not in privacy_options:
+            raise RuntimeError(
+                "TikTok privacy level "
+                f"{self._privacy_level} is not allowed for this creator/app. "
+                f"Available options: {', '.join(str(option) for option in privacy_options)}"
+            )
+
+        duration_limit = creator_info.get("max_video_post_duration_sec")
+        duration_seconds = _get_video_duration_seconds(video_path)
+        if isinstance(duration_limit, int) and duration_seconds is not None and duration_seconds > duration_limit:
+            raise RuntimeError(
+                f"TikTok allows at most {duration_limit}s for this creator, but the clip has about {duration_seconds:.1f}s."
+            )
+
+        disable_comment = self._disable_comment or bool(creator_info.get("comment_disabled"))
+        disable_duet = self._disable_duet or bool(creator_info.get("duet_disabled"))
+        disable_stitch = self._disable_stitch or bool(creator_info.get("stitch_disabled"))
+
+        return {
+            "title": metadata.caption,
+            "privacy_level": self._privacy_level,
+            "disable_comment": disable_comment,
+            "disable_duet": disable_duet,
+            "disable_stitch": disable_stitch,
+        }
+
     def _init_post(
-        self, video_path: Path
+        self, video_path: Path, metadata: ClipMetadata
     ) -> tuple[str | None, str | None, str | None]:
         """Initialize TikTok post. Returns (publish_id, upload_url, error_msg)."""
         file_size = video_path.stat().st_size
         total_chunk_count = max(1, math.ceil(file_size / _CHUNK_SIZE))
         chunk_size = file_size if total_chunk_count == 1 else _CHUNK_SIZE
+        init_endpoint = f"{_API_BASE}/v2/post/publish/inbox/video/init/"
+        payload: dict[str, object] = {
+            "source_info": {
+                "source": "FILE_UPLOAD",
+                "video_size": file_size,
+                "chunk_size": chunk_size,
+                "total_chunk_count": total_chunk_count,
+            },
+        }
 
-        with self._make_client() as client:
+        if self._post_mode == _POST_MODE_DIRECT:
+            init_endpoint = f"{_API_BASE}/v2/post/publish/video/init/"
+            creator_info, error = self._fetch_creator_info()
+            if error:
+                return None, None, error
             try:
-                resp = client.post(
-                    f"{_API_BASE}/v2/post/publish/inbox/video/init/",
-                    headers={
-                        "Authorization": f"Bearer {self._access_token}",
-                        "Content-Type": "application/json; charset=UTF-8",
-                    },
-                    json={
-                        "source_info": {
-                            "source": "FILE_UPLOAD",
-                            "video_size": file_size,
-                            "chunk_size": chunk_size,
-                            "total_chunk_count": total_chunk_count,
-                        },
-                    },
-                )
-            except httpx.HTTPError as exc:
-                return None, None, f"Init request failed: {exc}"
+                payload["post_info"] = self._build_post_info(metadata, creator_info, video_path)
+            except RuntimeError as exc:
+                return None, None, str(exc)
 
-        if resp.status_code != 200:
-            return None, None, f"Init failed: HTTP {resp.status_code}: {resp.text}"
+        response_payload, error = self._request_json(
+            method="POST",
+            url=init_endpoint,
+            json_body=payload,
+        )
+        if error:
+            return None, None, f"Init failed: {error}"
 
-        data = resp.json().get("data", {})
+        data = response_payload.get("data", {})
         publish_id = data.get("publish_id")
         upload_url = data.get("upload_url")
 
         if not publish_id or not upload_url:
-            return None, None, f"Init response missing publish_id or upload_url: {resp.text}"
+            return None, None, f"Init response missing publish_id or upload_url: {response_payload}"
 
         logger.debug("TikTok post initialized: publish_id=%s", publish_id)
         return publish_id, upload_url, None
@@ -467,7 +665,15 @@ class TikTokUploader(Uploader):
         return (
             "PENDING",
             None,
-            f"TikTok is still processing after {self._polling_max_retries} attempts (~{self._polling_max_retries * self._polling_interval / 60:.0f} min). Check your TikTok inbox — the draft should be there.",
+            (
+                f"TikTok is still processing after {self._polling_max_retries} attempts "
+                f"(~{self._polling_max_retries * self._polling_interval / 60:.0f} min). "
+                + (
+                    "Check the TikTok app to confirm whether the post was completed."
+                    if self._post_mode == _POST_MODE_DIRECT
+                    else "Check your TikTok inbox — the draft should be there."
+                )
+            ),
         )
 
     def upload(
@@ -479,22 +685,30 @@ class TikTokUploader(Uploader):
         if self._access_token is None:
             self.authenticate()
 
-        # The upload endpoint sends the video to TikTok's inbox/draft flow. Caption editing is completed in-app.
-        logger.warning(
-            "TikTok draft upload: the video is sent to the creator inbox for in-app editing. "
-            "Caption and hashtags may need to be finalized inside TikTok before publishing."
-        )
-
         meta = apply_platform_limits(metadata, _PLATFORM)
-        logger.info(
-            "TikTok draft metadata prepared: title_len=%d description_len=%d hashtags=%d caption_len=%d",
-            len(meta.title),
-            len(meta.description),
-            len(meta.hashtags),
-            len(meta.caption),
-        )
+        if self._post_mode == _POST_MODE_DIRECT:
+            logger.info(
+                "TikTok direct-post metadata prepared: title_len=%d description_len=%d hashtags=%d caption_len=%d privacy=%s",
+                len(meta.title),
+                len(meta.description),
+                len(meta.hashtags),
+                len(meta.caption),
+                self._privacy_level,
+            )
+        else:
+            logger.warning(
+                "TikTok draft upload: the video is sent to the creator inbox for in-app editing. "
+                "Caption and hashtags may need to be finalized inside TikTok before publishing."
+            )
+            logger.info(
+                "TikTok draft metadata prepared: title_len=%d description_len=%d hashtags=%d caption_len=%d",
+                len(meta.title),
+                len(meta.description),
+                len(meta.hashtags),
+                len(meta.caption),
+            )
 
-        publish_id, upload_url, error = self._init_post(video_path)
+        publish_id, upload_url, error = self._init_post(video_path, meta)
         if error:
             logger.error(error)
             return UploadResult(
@@ -506,6 +720,24 @@ class TikTokUploader(Uploader):
             logger.error(error)
             return UploadResult(
                 platform=_PLATFORM, clip_index=clip_index, status="failed", error=error
+            )
+
+        if self._post_mode == _POST_MODE_DIRECT:
+            logger.info("TikTok chunks uploaded for publish_id=%s. Polling publication status.", publish_id)
+            status, url, error = self._poll_status(publish_id)
+            if status == "PUBLISH_COMPLETE":
+                return UploadResult(
+                    platform=_PLATFORM,
+                    clip_index=clip_index,
+                    status="success",
+                    url=url,
+                )
+            return UploadResult(
+                platform=_PLATFORM,
+                clip_index=clip_index,
+                status="pending" if status == "PENDING" else "failed",
+                url=url,
+                error=error,
             )
 
         logger.info(

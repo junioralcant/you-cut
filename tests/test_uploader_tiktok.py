@@ -141,6 +141,93 @@ class TestUploadSuccess:
         assert "source_info" in received_init_body
         assert "post_info" not in received_init_body
 
+    def test_direct_post_sends_post_info_and_polls_until_success(self, token_dir, video_file, metadata):
+        received_creator_info = 0
+        received_init_body: dict = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            url = str(request.url)
+            if "creator_info/query" in url:
+                nonlocal received_creator_info
+                received_creator_info += 1
+                return httpx.Response(
+                    200,
+                    json={
+                        "data": {
+                            "privacy_level_options": ["SELF_ONLY", "PUBLIC_TO_EVERYONE"],
+                            "comment_disabled": False,
+                            "duet_disabled": False,
+                            "stitch_disabled": False,
+                            "max_video_post_duration_sec": 300,
+                        },
+                        "error": {"code": "ok", "message": ""},
+                    },
+                )
+            if "publish/video/init" in url:
+                received_init_body.update(__import__("json").loads(request.content))
+                return httpx.Response(
+                    200,
+                    json={"data": {"publish_id": _PUBLISH_ID, "upload_url": "https://fake.upload/"}},
+                )
+            if "fake.upload" in url:
+                return httpx.Response(200, json={"data": {}})
+            if "status/fetch" in url:
+                return httpx.Response(
+                    200,
+                    json={
+                        "data": {
+                            "status": "PUBLISH_COMPLETE",
+                            "publish_id": _PUBLISH_ID,
+                            "publicaly_available_post_id": [_VIDEO_ID],
+                        },
+                        "error": {"code": "ok", "message": ""},
+                    },
+                )
+            return httpx.Response(404, text="not found")
+
+        transport = httpx.MockTransport(handler)
+        uploader = _make_uploader(token_dir, transport)
+        uploader._post_mode = "direct"
+
+        result = uploader.upload(video_file, metadata, clip_index=2)
+
+        assert received_creator_info == 1
+        assert result.status == "success"
+        assert result.url == f"https://www.tiktok.com/video/{_VIDEO_ID}"
+        assert received_init_body["post_info"]["privacy_level"] == "SELF_ONLY"
+        assert received_init_body["post_info"]["title"] == metadata.caption
+        assert received_init_body["post_info"]["disable_comment"] is False
+        assert "source_info" in received_init_body
+
+    def test_direct_post_fails_when_privacy_level_is_not_allowed(self, token_dir, video_file, metadata):
+        def handler(request: httpx.Request) -> httpx.Response:
+            url = str(request.url)
+            if "creator_info/query" in url:
+                return httpx.Response(
+                    200,
+                    json={
+                        "data": {
+                            "privacy_level_options": ["MUTUAL_FOLLOW_FRIENDS"],
+                            "comment_disabled": False,
+                            "duet_disabled": False,
+                            "stitch_disabled": False,
+                            "max_video_post_duration_sec": 300,
+                        },
+                        "error": {"code": "ok", "message": ""},
+                    },
+                )
+            return httpx.Response(404, text="not found")
+
+        transport = httpx.MockTransport(handler)
+        uploader = _make_uploader(token_dir, transport)
+        uploader._post_mode = "direct"
+
+        result = uploader.upload(video_file, metadata, clip_index=3)
+
+        assert result.status == "failed"
+        assert result.error is not None
+        assert "privacy level" in result.error
+
 
 class TestPollingSkipped:
     def test_no_status_request_after_upload(self, token_dir, video_file, metadata):
@@ -540,6 +627,18 @@ class TestTokenRequests:
         assert "client_key=client_key_123" in seen["body"]
         assert "client_secret=client_secret_456" in seen["body"]
         assert "grant_type=refresh_token" in seen["body"]
+
+    def test_direct_post_authorization_requests_video_publish_scope(self, token_dir):
+        uploader = TikTokUploader(token_dir=token_dir, post_mode="direct")
+
+        url = uploader._build_authorization_url(
+            client_key="client_key_123",
+            redirect_uri="http://127.0.0.1:8765/callback",
+            state="state_123",
+            code_challenge="challenge_123",
+        )
+
+        assert "scope=user.info.basic%2Cvideo.upload%2Cvideo.publish" in url
 
 
 class TestPkceHelpers:

@@ -180,7 +180,7 @@ youcut run SOURCE [OPTIONS]
 
 Opções disponíveis:
 
-- `--clips`: sem `--upload`, mantém o comportamento legado de quantidade de clipes; com `--upload`, seleciona `all` ou índices como `1,3`
+- `--clips`: quantidade de clipes a gerar
 - `--clip-count`, `--count`, `-n`: quantidade explícita de clipes a gerar
 - `--style`, `-s`: estilo da legenda, `word` ou `phrase`
 - `--dry-run`: analisa os trechos sem exportar clipes
@@ -330,6 +330,7 @@ Para autenticar no TikTok, configure primeiro a variável abaixo no `.env`:
 ```env
 TIKTOK_CLIENT_KEY=seu_client_key
 TIKTOK_CLIENT_SECRET=seu_client_secret
+TIKTOK_POST_MODE=draft
 ```
 
 Depois execute:
@@ -356,6 +357,9 @@ youcut auth status
 Observação importante:
 
 - apps do TikTok não auditados publicam vídeos como `private`; para postagem pública é necessário que o app passe pela auditoria do TikTok.
+- para publicar direto pela API em vez de enviar para rascunho, use `TIKTOK_POST_MODE=direct` e refaça `youcut auth login --platform tiktok` para obter o escopo `video.publish`.
+- no modo `direct`, o YouCut envia `privacy_level` ao TikTok. O padrão seguro é `SELF_ONLY`, mas você pode sobrescrever com `TIKTOK_PRIVACY_LEVEL=PUBLIC_TO_EVERYONE`, `MUTUAL_FOLLOW_FRIENDS`, `FOLLOWER_OF_CREATOR` ou `SELF_ONLY`, desde que essa opção esteja liberada para a conta conectada.
+- opcionalmente, você pode controlar interações com `TIKTOK_DISABLE_COMMENT`, `TIKTOK_DISABLE_DUET` e `TIKTOK_DISABLE_STITCH` (`true` ou `false`).
 
 #### YouTube
 
