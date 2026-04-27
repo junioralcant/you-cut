@@ -2,8 +2,11 @@ import base64
 import io
 import json
 import logging
+import os
 import subprocess
+import sys
 import tempfile
+from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -25,6 +28,10 @@ _MIN_SECONDARY_FONT_SIZE = 24
 _ASSETS_DIR = Path(__file__).parent / "assets"
 _FONT_PATH = _ASSETS_DIR / "Roboto-Regular.ttf"
 _BOLD_FONT_PATH = Path("/System/Library/Fonts/Supplemental/Arial Black.ttf")
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+_THUMBNAIL_SKILL_PATH = _REPO_ROOT / ".claude" / "skills" / "thumbnail-generator" / "SKILL.md"
+_THUMBNAIL_PRD_PATH = _REPO_ROOT / ".claude" / "skills" / "thumbnail-generator" / "prd.md"
+_THUMBNAIL_SKILL_SCRIPT_PATH = _REPO_ROOT / ".claude" / "skills" / "thumbnail-generator" / "scripts" / "generate_thumbnail.py"
 
 
 def generate_thumbnail(
@@ -91,6 +98,7 @@ def _build_thumbnail_result(
 ) -> ThumbnailFrameResult:
     frames = _extract_frames_candidates(source)
     anthropic_client, openai_client = _build_ai_clients(config)
+    openai_api_key = _resolve_openai_api_key(config, openai_client)
 
     if anthropic_client is not None:
         frame_timestamp, frame_bytes, selection_method, frame_score = _select_best_frame_via_ai_result(
@@ -103,17 +111,22 @@ def _build_thumbnail_result(
         selection_method = "local"
         logger.warning("Seleção por IA indisponível; usando método local")
 
+    reference_frames = _select_generation_reference_frames(frames, frame_timestamp)
     if openai_client is not None:
         thumbnail_bytes, generation_method = _generate_thumbnail_via_ai_result(
             frame_bytes,
             clip.title,
             openai_client,
+            reference_frames=reference_frames,
+            openai_api_key=openai_api_key,
         )
     else:
         thumbnail_bytes, generation_method = _generate_thumbnail_via_ai_result(
             frame_bytes,
             clip.title,
             None,
+            reference_frames=reference_frames,
+            openai_api_key=openai_api_key,
         )
 
     image = _load_image_from_bytes(thumbnail_bytes)
@@ -440,7 +453,7 @@ def _generate_thumbnail_via_ai(
     frame_bytes: bytes,
     title: str,
     openai_client: Any,
-    timeout: float = 30.0,
+    timeout: float = 60.0,
 ) -> bytes:
     thumbnail_bytes, _ = _generate_thumbnail_via_ai_result(frame_bytes, title, openai_client, timeout)
     return thumbnail_bytes
@@ -450,44 +463,24 @@ def _generate_thumbnail_via_ai_result(
     frame_bytes: bytes,
     title: str,
     openai_client: Any,
-    timeout: float = 30.0,
+    timeout: float = 60.0,
+    reference_frames: list[bytes] | None = None,
+    openai_api_key: str | None = None,
 ) -> tuple[bytes, str]:
     if openai_client is None:
         logger.warning("Cliente OpenAI ausente; usando fallback local para geração de thumbnail")
         return _render_local_thumbnail_bytes(frame_bytes), "local"
 
-    prompt = (
-        "Create a premium YouTube thumbnail derived from the reference frame. "
-        "Preserve the exact identity of the main subject from the reference frame. "
-        "Do not change the person's face, age, skin tone, hair, body type, or identity. "
-        "Do not replace the person with another character or invent a different subject. "
-        "Preserve gaze direction, gesture, clothing cues, and overall scene truthfully. "
-        "Increase contrast, subject separation, facial readability, and narrative tension without inventing false events. "
-        "Keep all text and critical subjects in the vertical center safe-zone for 16:9 cropping. "
-        "The top 12% of the frame should remain mostly empty background space. "
-        "Favor cinematic clarity, bold subject framing, clean background separation, and dramatic but realistic lighting. "
-        f"Video title context: {title}."
-    )
+    prompt = _build_thumbnail_generation_prompt(title)
+    reference_frame_bytes = reference_frames or [frame_bytes]
 
     try:
-        client = _client_with_timeout(openai_client, timeout)
-        response = client.images.edit(
-            model="gpt-image-1",
-            image=("frame.png", frame_bytes, "image/png"),
+        image_bytes = _run_thumbnail_skill_script(
             prompt=prompt,
-            size="1536x1024",
-            quality="low",
+            reference_frames=reference_frame_bytes,
+            openai_api_key=openai_api_key or _resolve_openai_api_key(None, openai_client),
+            timeout=timeout,
         )
-        data = getattr(response, "data", None) or []
-        if not data:
-            raise ValueError("Resposta de images.edit sem imagens")
-        image_item = data[0]
-        b64_json = getattr(image_item, "b64_json", None)
-        if b64_json is None and isinstance(image_item, dict):
-            b64_json = image_item.get("b64_json")
-        if not b64_json:
-            raise ValueError("Resposta de images.edit sem b64_json")
-        image_bytes = base64.b64decode(b64_json)
         resized_bytes = _resize_image_bytes(image_bytes, target_size=(_THUMBNAIL_W, _THUMBNAIL_H))
         logger.info("Thumbnail gerada por IA: method=ai output_path=%s", "<in-memory>")
         return resized_bytes, "ai"
@@ -821,3 +814,137 @@ def _client_with_timeout(client: Any, timeout: float) -> Any:
     if hasattr(client, "with_options"):
         return client.with_options(timeout=timeout)
     return client
+
+
+def _select_generation_reference_frames(
+    frames: list[tuple[float, bytes]],
+    selected_timestamp: float,
+    max_frames: int = 5,
+) -> list[bytes]:
+    if not frames:
+        return []
+
+    selected_index = min(range(len(frames)), key=lambda index: abs(frames[index][0] - selected_timestamp))
+    indices = [selected_index]
+    offset = 1
+    while len(indices) < min(max_frames, len(frames)):
+        left = selected_index - offset
+        right = selected_index + offset
+        if left >= 0:
+            indices.append(left)
+        if len(indices) >= min(max_frames, len(frames)):
+            break
+        if right < len(frames):
+            indices.append(right)
+        offset += 1
+
+    unique_indices: list[int] = []
+    seen: set[int] = set()
+    for index in indices:
+        if index not in seen:
+            unique_indices.append(index)
+            seen.add(index)
+    return [frames[index][1] for index in unique_indices]
+
+
+def _resolve_openai_api_key(
+    config: "PipelineConfig | str | None",
+    openai_client: Any,
+) -> str | None:
+    if isinstance(config, str):
+        return config
+    if config is not None:
+        api_key = getattr(config, "openai_api_key", None)
+        if api_key:
+            return api_key
+    api_key = getattr(openai_client, "api_key", None)
+    if api_key:
+        return api_key
+    return os.getenv("OPENAI_API_KEY")
+
+
+def _run_thumbnail_skill_script(
+    prompt: str,
+    reference_frames: list[bytes],
+    openai_api_key: str | None,
+    timeout: float,
+) -> bytes:
+    if not openai_api_key:
+        raise ValueError("OPENAI_API_KEY indisponível para o backend da skill de thumbnail")
+    if not reference_frames:
+        raise ValueError("Nenhum frame de referência disponível para a geração da thumbnail")
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir_path = Path(tmpdir)
+        frame_paths: list[str] = []
+        for index, frame_bytes in enumerate(reference_frames):
+            frame_path = tmpdir_path / f"reference_{index:02d}.png"
+            frame_path.write_bytes(frame_bytes)
+            frame_paths.append(str(frame_path))
+
+        output_name = "generated.png"
+        env = os.environ.copy()
+        env["OPENAI_API_KEY"] = openai_api_key
+        result = subprocess.run(
+            [sys.executable, str(_THUMBNAIL_SKILL_SCRIPT_PATH), prompt, output_name, *frame_paths],
+            cwd=tmpdir,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=True,
+        )
+
+        output_path = tmpdir_path / "thumbnails" / output_name
+        if not output_path.exists():
+            raise RuntimeError(f"Skill de thumbnail não gerou saída. stdout={result.stdout} stderr={result.stderr}")
+        return output_path.read_bytes()
+
+
+@lru_cache(maxsize=1)
+def _load_thumbnail_prompt_context() -> str:
+    context_parts: list[str] = []
+
+    skill_excerpt = _read_text_if_exists(_THUMBNAIL_SKILL_PATH)
+    if skill_excerpt:
+        context_parts.append(
+            "Skill guidance: use a premium YouTube thumbnail treatment, emphasize a clear visual hook, "
+            "keep subjects inside the vertical center safe-zone for 16:9 cropping, preserve top 12% as mostly empty background when possible, "
+            "prefer cinematic lighting, strong composition, and avoid unnecessary on-image text."
+        )
+
+    prd_excerpt = _read_text_if_exists(_THUMBNAIL_PRD_PATH)
+    if prd_excerpt:
+        context_parts.append(
+            "PRD guidance: preserve the real content of the video, use the selected frame as mandatory reference, "
+            "favor brightness, clarity, vibrant cyan/green/yellow/orange accents when natural, expressive faces, and narrative composition. "
+            "Do not embed text by default. Improve contrast, subject/background separation, and click appeal without changing identity or inventing false events."
+        )
+
+    return " ".join(context_parts).strip()
+
+
+def _build_thumbnail_generation_prompt(title: str) -> str:
+    doc_context = _load_thumbnail_prompt_context()
+    base_prompt = (
+        "Create a premium YouTube thumbnail derived from the reference frame. "
+        "Preserve the exact identity of the main subject from the reference frame. "
+        "Do not change the person's face, age, skin tone, hair, body type, or identity. "
+        "Do not replace the person with another character or invent a different subject. "
+        "Preserve gaze direction, gesture, clothing cues, and overall scene truthfully. "
+        "Do not add any text, captions, words, logos, labels, or typography inside the image unless explicitly requested elsewhere. "
+        "Increase contrast, subject separation, facial readability, and narrative tension without inventing false events. "
+        "Keep all text and critical subjects in the vertical center safe-zone for 16:9 cropping. "
+        "The top 12% of the frame should remain mostly empty background space. "
+        "Favor cinematic clarity, bold subject framing, clean background separation, and dramatic but realistic lighting. "
+    )
+    if doc_context:
+        base_prompt += f"{doc_context} "
+    return f"{base_prompt}Video title context: {title}."
+
+
+def _read_text_if_exists(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8")
+    except Exception:
+        return ""

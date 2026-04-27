@@ -11,11 +11,13 @@ from PIL import Image
 
 from youcut.models import ThumbnailFrameResult, ViralClip
 from youcut.thumbnail_generator import (
+    _build_thumbnail_generation_prompt,
     _compose_text_overlay,
     _extract_frames_candidates,
     _generate_thumbnail_via_ai,
     _generate_thumbnail_via_ai_result,
     _resize_to_youtube_format,
+    _select_generation_reference_frames,
     _select_best_face_frame,
     _select_best_frame_via_ai,
     _select_best_frame_via_ai_result,
@@ -161,7 +163,7 @@ def test_build_thumbnail_result_with_config_calls_ai_stages(tmp_path):
     ai_generation = patch("youcut.thumbnail_generator._generate_thumbnail_via_ai_result", return_value=(thumbnail_bytes, "ai"))
     with (
         patch("youcut.thumbnail_generator._extract_frames_candidates", return_value=[(2.5, frame_bytes)]),
-        patch("youcut.thumbnail_generator._build_ai_clients", return_value=(object(), object())),
+        patch("youcut.thumbnail_generator._build_ai_clients", return_value=(object(), SimpleNamespace(api_key="test-key"))),
         ai_selection as mock_selection,
         ai_generation as mock_generation,
     ):
@@ -395,17 +397,25 @@ def test_select_best_frame_via_ai_logs_reason_on_success(caplog):
 
 def test_generate_thumbnail_via_ai_returns_correct_size():
     input_png = _make_png(640, 360)
-    output_png = _make_png(1536, 1024)
-    b64_image = base64.b64encode(output_png).decode("utf-8")
-    response = SimpleNamespace(data=[SimpleNamespace(b64_json=b64_image)])
-    client = MagicMock()
-    client.with_options.return_value = client
-    client.images.edit.return_value = response
+    client = SimpleNamespace(api_key="test-key")
 
-    result = _generate_thumbnail_via_ai(input_png, "Teste", client)
+    with patch("youcut.thumbnail_generator._run_thumbnail_skill_script", return_value=_make_png(1536, 864)):
+        result = _generate_thumbnail_via_ai(input_png, "Teste", client)
 
     with Image.open(io.BytesIO(result)) as img:
         assert img.size == (1280, 720)
+
+
+def test_build_thumbnail_generation_prompt_uses_doc_context():
+    with patch(
+        "youcut.thumbnail_generator._load_thumbnail_prompt_context",
+        return_value="Skill guidance: safe-zone. PRD guidance: no embedded text by default.",
+    ):
+        prompt = _build_thumbnail_generation_prompt("Teste")
+
+    assert "safe-zone" in prompt
+    assert "no embedded text by default" in prompt
+    assert "Video title context: Teste." in prompt
 
 
 def test_generate_thumbnail_via_ai_fallback_when_no_client(caplog):
@@ -422,11 +432,13 @@ def test_generate_thumbnail_via_ai_fallback_when_no_client(caplog):
 
 def test_generate_thumbnail_via_ai_fallback_on_timeout(caplog):
     input_png = _make_png(640, 360)
-    client = MagicMock()
-    client.with_options.return_value = client
-    client.images.edit.side_effect = TimeoutError("timeout")
+    client = SimpleNamespace(api_key="test-key")
 
-    with patch("youcut.thumbnail_generator._render_local_thumbnail_bytes", return_value=_make_png(1280, 720)), caplog.at_level("WARNING"):
+    with (
+        patch("youcut.thumbnail_generator._run_thumbnail_skill_script", side_effect=TimeoutError("timeout")),
+        patch("youcut.thumbnail_generator._render_local_thumbnail_bytes", return_value=_make_png(1280, 720)),
+        caplog.at_level("WARNING"),
+    ):
         _, method = _generate_thumbnail_via_ai_result(input_png, "Teste", client)
 
     assert method == "local"
@@ -435,11 +447,13 @@ def test_generate_thumbnail_via_ai_fallback_on_timeout(caplog):
 
 def test_generate_thumbnail_via_ai_fallback_on_http_error(caplog):
     input_png = _make_png(640, 360)
-    client = MagicMock()
-    client.with_options.return_value = client
-    client.images.edit.side_effect = RuntimeError("429")
+    client = SimpleNamespace(api_key="test-key")
 
-    with patch("youcut.thumbnail_generator._render_local_thumbnail_bytes", return_value=_make_png(1280, 720)), caplog.at_level("WARNING"):
+    with (
+        patch("youcut.thumbnail_generator._run_thumbnail_skill_script", side_effect=RuntimeError("429")),
+        patch("youcut.thumbnail_generator._render_local_thumbnail_bytes", return_value=_make_png(1280, 720)),
+        caplog.at_level("WARNING"),
+    ):
         _, method = _generate_thumbnail_via_ai_result(input_png, "Teste", client)
 
     assert method == "local"
@@ -448,18 +462,37 @@ def test_generate_thumbnail_via_ai_fallback_on_http_error(caplog):
 
 def test_generate_thumbnail_via_ai_logs_method_ai_on_success(caplog):
     input_png = _make_png(640, 360)
-    output_png = _make_png(1536, 1024)
-    b64_image = base64.b64encode(output_png).decode("utf-8")
-    response = SimpleNamespace(data=[SimpleNamespace(b64_json=b64_image)])
-    client = MagicMock()
-    client.with_options.return_value = client
-    client.images.edit.return_value = response
+    client = SimpleNamespace(api_key="test-key")
 
-    with caplog.at_level("INFO"):
+    with patch("youcut.thumbnail_generator._run_thumbnail_skill_script", return_value=_make_png(1536, 864)), caplog.at_level("INFO"):
         _, method = _generate_thumbnail_via_ai_result(input_png, "Teste", client)
 
     assert method == "ai"
     assert "method=ai" in caplog.text
+
+
+def test_generate_thumbnail_via_ai_uses_built_prompt():
+    input_png = _make_png(640, 360)
+    client = SimpleNamespace(api_key="test-key")
+
+    with patch(
+        "youcut.thumbnail_generator._build_thumbnail_generation_prompt",
+        return_value="PROMPT_FROM_DOCS",
+    ), patch(
+        "youcut.thumbnail_generator._run_thumbnail_skill_script",
+        return_value=_make_png(1536, 864),
+    ) as mock_skill:
+        _generate_thumbnail_via_ai_result(input_png, "Teste", client)
+
+    assert mock_skill.call_args.kwargs["prompt"] == "PROMPT_FROM_DOCS"
+
+
+def test_select_generation_reference_frames_prefers_neighbors():
+    frames = [(float(index), bytes([index])) for index in range(10)]
+
+    result = _select_generation_reference_frames(frames, selected_timestamp=4.0, max_frames=5)
+
+    assert result == [b"\x04", b"\x03", b"\x05", b"\x02", b"\x06"]
 
 
 @patch("youcut.thumbnail_generator._extract_frame")

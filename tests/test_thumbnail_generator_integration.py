@@ -1,4 +1,3 @@
-import base64
 import io
 import subprocess
 from pathlib import Path
@@ -88,13 +87,12 @@ def test_generate_thumbnail_ai_path_produces_valid_png(synthetic_video, tmp_path
     anthropic_client.with_options.return_value = anthropic_client
     anthropic_client.messages.create.return_value = anth_response
 
-    b64_image = base64.b64encode(_make_png()).decode("utf-8")
-    openai_response = SimpleNamespace(data=[SimpleNamespace(b64_json=b64_image)])
-    openai_client = MagicMock()
-    openai_client.with_options.return_value = openai_client
-    openai_client.images.edit.return_value = openai_response
+    openai_client = SimpleNamespace(api_key="test-key")
 
-    with patch("youcut.thumbnail_generator._build_ai_clients", return_value=(anthropic_client, openai_client)):
+    with (
+        patch("youcut.thumbnail_generator._build_ai_clients", return_value=(anthropic_client, openai_client)),
+        patch("youcut.thumbnail_generator._run_thumbnail_skill_script", return_value=_make_png(1536, 864)),
+    ):
         result = _build_thumbnail_result(clip, synthetic_video, output_path, SimpleNamespace())
 
     assert result.selection_method == "ai"
@@ -111,13 +109,12 @@ def test_generate_thumbnail_ai_selection_fallback(synthetic_video, tmp_path):
     anthropic_client.with_options.return_value = anthropic_client
     anthropic_client.messages.create.side_effect = RuntimeError("boom")
 
-    b64_image = base64.b64encode(_make_png()).decode("utf-8")
-    openai_response = SimpleNamespace(data=[SimpleNamespace(b64_json=b64_image)])
-    openai_client = MagicMock()
-    openai_client.with_options.return_value = openai_client
-    openai_client.images.edit.return_value = openai_response
+    openai_client = SimpleNamespace(api_key="test-key")
 
-    with patch("youcut.thumbnail_generator._build_ai_clients", return_value=(anthropic_client, openai_client)):
+    with (
+        patch("youcut.thumbnail_generator._build_ai_clients", return_value=(anthropic_client, openai_client)),
+        patch("youcut.thumbnail_generator._run_thumbnail_skill_script", return_value=_make_png(1536, 864)),
+    ):
         result = _build_thumbnail_result(clip, synthetic_video, output_path, SimpleNamespace())
 
     assert result.selection_method == "local"
@@ -133,11 +130,12 @@ def test_generate_thumbnail_ai_generation_fallback(synthetic_video, tmp_path):
     anthropic_client.with_options.return_value = anthropic_client
     anthropic_client.messages.create.return_value = anth_response
 
-    openai_client = MagicMock()
-    openai_client.with_options.return_value = openai_client
-    openai_client.images.edit.side_effect = RuntimeError("429")
+    openai_client = SimpleNamespace(api_key="test-key")
 
-    with patch("youcut.thumbnail_generator._build_ai_clients", return_value=(anthropic_client, openai_client)):
+    with (
+        patch("youcut.thumbnail_generator._build_ai_clients", return_value=(anthropic_client, openai_client)),
+        patch("youcut.thumbnail_generator._run_thumbnail_skill_script", side_effect=RuntimeError("429")),
+    ):
         result = _build_thumbnail_result(clip, synthetic_video, output_path, SimpleNamespace())
 
     assert result.selection_method == "ai"

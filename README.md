@@ -232,6 +232,10 @@ youcut cuts "https://www.youtube.com/watch?v=exemplo" --max-clips 3 --skip-revie
 ```
 
 > **Thumbnails:** para gerar thumbnails via DALL-E 3 no modo YouTube, configure `OPENAI_API_KEY` no `.env`.
+>
+> **Thumbnail sem texto:** esse já é o comportamento padrão. Para gerar thumbnails sem texto embutido, não passe `--thumbnail-text`.
+>
+> **Thumbnail com texto opcional:** use `--thumbnail-text "SEU TEXTO"` quando quiser forçar sobreposição de texto na thumbnail.
 
 ### Fluxo B — Vídeos curtos a partir de cortes existentes
 
@@ -265,6 +269,7 @@ youcut cuts "https://www.youtube.com/watch?v=exemplo" --skip-review --upload --p
 | `--max-clips`, `-n` | Número máximo de clipes a gerar (padrão: IA decide) |
 | `--skip-review` | Pula a revisão interativa e vai direto para publicação |
 | `--upload` | Faz upload dos clipes aprovados ao final do pipeline |
+| `--thumbnail-text` | Texto opcional para embutir na thumbnail. Omitir essa flag gera thumbnail sem texto |
 | `--platforms` | Plataformas de upload: `youtube`, `instagram`, `tiktok` ou `all` |
 | `--log-level` | Nível de log: `DEBUG`, `INFO`, `WARNING`, `ERROR` |
 | `--log-file` | Caminho para salvar o arquivo de log |
