@@ -100,53 +100,21 @@ def _parse_platforms(platforms_raw: str) -> list[str]:
     return platforms
 
 
-def _parse_upload_clips(clips_raw: str) -> list[int] | None:
-    normalized = clips_raw.strip().lower()
-    if not normalized or normalized == "all":
-        return None
-
-    values: list[int] = []
-    invalid: list[str] = []
-    for part in clips_raw.split(","):
-        item = part.strip()
-        if not item:
-            invalid.append("<vazio>")
-            continue
-        if not item.isdigit():
-            invalid.append(item)
-            continue
-        values.append(int(item))
-
-    if invalid:
-        invalid_str = ", ".join(invalid)
-        raise ValueError(
-            f"Valores inválidos em `--clips`: {invalid_str}. Use `all` ou uma lista de índices numéricos como `1,3,5`."
-        )
-
-    return sorted(set(values))
-
-
 def _resolve_run_clip_options(
     *,
-    upload: bool,
     clip_count: int,
     clips_raw: str | None,
 ) -> tuple[int, list[int] | None]:
-    if upload:
-        return clip_count, _parse_upload_clips(clips_raw or "all")
-
     if clips_raw is None:
         return clip_count, None
 
-    legacy_value = clips_raw.strip()
-    if not legacy_value:
+    clip_count_value = clips_raw.strip()
+    if not clip_count_value:
         raise ValueError("`--clips` não pode ser vazio.")
-    if not legacy_value.isdigit():
-        raise ValueError(
-            "Sem `--upload`, `--clips` mantém o comportamento legado e aceita apenas a quantidade de clipes a gerar."
-        )
+    if not clip_count_value.isdigit():
+        raise ValueError("`--clips` deve ser um número inteiro com a quantidade de clipes a gerar.")
 
-    return int(legacy_value), None
+    return int(clip_count_value), None
 
 
 def _build_uploader(platform: str, token_dir: Path):
@@ -417,7 +385,7 @@ def run(
     upload_clips_raw: Optional[str] = typer.Option(
         None,
         "--clips",
-        help="Sem --upload: quantidade legada de clipes. Com --upload: all ou lista separada por vírgula, ex: 1,3,5",
+        help="Quantidade de clipes a gerar",
     ),
     log_level: str = typer.Option("INFO", "--log-level", help="Nível de log: DEBUG, INFO, WARNING, ERROR"),
     log_file: Optional[Path] = typer.Option(None, "--log-file", help="Caminho para salvar o arquivo de log"),
@@ -441,7 +409,6 @@ def run(
     try:
         selected_platforms = _parse_platforms(platforms_raw) if upload else list(_SUPPORTED_PLATFORMS)
         resolved_clip_count, clips_filter = _resolve_run_clip_options(
-            upload=upload,
             clip_count=clip_count,
             clips_raw=upload_clips_raw,
         )

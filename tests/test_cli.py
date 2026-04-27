@@ -528,25 +528,26 @@ class TestUploadIntegration:
         assert kwargs["platforms"] == ["youtube", "instagram", "tiktok"]
         assert kwargs["clips_filter"] is None
 
-    def test_run_with_upload_uses_clips_flag_as_filter(self):
-        clips = [_make_clip("A"), _make_clip("B"), _make_clip("C")]
+    def test_run_with_upload_uses_clips_flag_as_clip_count(self):
+        clips = [_make_clip(f"Clipe {i}") for i in range(6)]
         mocks = _mock_pipeline(clips=clips)
         result = _run_with_mocks(
             mocks,
-            extra_args=["--upload", "--platforms", "youtube", "--clips", "1,3"],
+            extra_args=["--upload", "--platforms", "youtube", "--clips", "2"],
         )
 
         assert result.exit_code == 0
+        assert mocks["cut_clip"].call_count == 2
         kwargs = mocks["upload_clips"].call_args.kwargs
         assert kwargs["platforms"] == ["youtube"]
-        assert kwargs["clips_filter"] == [1, 3]
+        assert kwargs["clips_filter"] is None
 
     def test_run_with_upload_uses_clip_count_from_explicit_flag(self):
         clips = [_make_clip(f"Clipe {i}") for i in range(6)]
         mocks = _mock_pipeline(clips=clips)
         result = _run_with_mocks(
             mocks,
-            extra_args=["--upload", "--clip-count", "2", "--clips", "all"],
+            extra_args=["--upload", "--clip-count", "2"],
         )
 
         assert result.exit_code == 0
@@ -565,7 +566,7 @@ class TestUploadIntegration:
         result = _run_with_mocks(mocks, extra_args=["--upload", "--clips", "abc"])
 
         assert result.exit_code != 0
-        assert "--clips" in result.output or "índices" in result.output.lower()
+        assert "--clips" in result.output or "número inteiro" in result.output.lower()
         mocks["download"].assert_not_called()
 
     def test_invalid_non_upload_clips_exit_nonzero_before_processing(self):
@@ -573,7 +574,7 @@ class TestUploadIntegration:
         result = _run_with_mocks(mocks, extra_args=["--clips", "1,3"])
 
         assert result.exit_code != 0
-        assert "comportamento legado" in result.output.lower() or "--upload" in result.output.lower()
+        assert "número inteiro" in result.output.lower() or "--clips" in result.output.lower()
         mocks["download"].assert_not_called()
 
     def test_run_with_upload_and_no_clips_flag_uploads_all(self):
@@ -601,14 +602,15 @@ class TestPromptClipSelection:
         assert result.exit_code == 0
         mocks["prompt_clip_selection"].assert_not_called()
 
-    def test_upload_clips_receives_clips_filter_from_flag(self):
-        clips = [_make_clip("A"), _make_clip("B"), _make_clip("C")]
+    def test_upload_clips_receives_all_generated_clips_when_using_clips_flag(self):
+        clips = [_make_clip(f"Clipe {i}") for i in range(5)]
         mocks = _mock_pipeline(clips=clips)
-        result = _run_with_mocks(mocks, extra_args=["--upload", "--platforms", "youtube", "--clips", "1,3"])
+        result = _run_with_mocks(mocks, extra_args=["--upload", "--platforms", "youtube", "--clips", "3"])
 
         assert result.exit_code == 0
+        assert mocks["cut_clip"].call_count == 3
         kwargs = mocks["upload_clips"].call_args.kwargs
-        assert kwargs["clips_filter"] == [1, 3]
+        assert kwargs["clips_filter"] is None
 
     def test_prompt_clip_selection_not_called_without_upload_flag(self):
         mocks = _mock_pipeline()
