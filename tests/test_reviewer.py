@@ -107,6 +107,23 @@ class TestTitleEditing:
 
         assert result[0].title == "Original"
 
+    def test_youtube_title_prompt_shows_guidance(self):
+        clips = [_make_clip("Original")]
+        records = [_make_record("Original")]
+
+        mock_select = _mock_select(["Editar título", "Aprovar"])
+        mock_text = MagicMock()
+        mock_text.return_value.ask.return_value = "Titulo revisado para YouTube"
+
+        with patch("youcut.reviewer.questionary.select", mock_select), \
+             patch("youcut.reviewer.questionary.text", mock_text):
+            review_clips(clips, records, "youtube")
+
+        prompt = mock_text.call_args.args[0]
+        assert "5-9 palavras" in prompt
+        assert "30 caracteres" in prompt
+        assert "pode passar" in prompt
+
 
 class TestYoutubeMode:
     def test_regenerate_thumbnail_called(self):

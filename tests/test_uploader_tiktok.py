@@ -278,6 +278,29 @@ class TestInitError:
         assert result.status == "failed"
         assert "500" in result.error
 
+    def test_draft_pending_share_spam_error_returns_actionable_guidance(self, token_dir, video_file, metadata):
+        responses = [
+            (
+                400,
+                {
+                    "error": {
+                        "code": "spam_risk_too_many_pending_share",
+                        "message": "spam_risk_too_many_pending_share",
+                    }
+                },
+            ),
+        ]
+        transport = _sequential_transport(responses)
+        uploader = _make_uploader(token_dir, transport)
+
+        result = uploader.upload(video_file, metadata, clip_index=5)
+
+        assert result.status == "failed"
+        assert result.error is not None
+        assert "TIKTOK_POST_MODE=direct" in result.error
+        assert "youcut auth login --platform tiktok" in result.error
+        assert "Conta privada por si so nao muda o fluxo de inbox" in result.error
+
 
 class TestUploadChunkError:
     def test_http_5xx_on_chunk_upload_returns_failed(self, token_dir, video_file, metadata):

@@ -543,7 +543,7 @@ def _select_cut_mode() -> CutMode:
         "Selecione o modo de corte:",
         choices=[
             questionary.Choice(
-                "Vídeos longos para YouTube (paisagem 16:9, 5–20 min por clipe)",
+                "Vídeos longos para YouTube (paisagem 16:9, 15–25 min por clipe)",
                 value="youtube",
             ),
             questionary.Choice(

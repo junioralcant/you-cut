@@ -36,8 +36,8 @@ def mock_transcription(tmp_path):
         segments=[
             TranscriptionSegment(
                 start=0.0,
-                end=400.0,
-                text="Long discussion about technology and innovation.",
+                end=1800.0,
+                text="Long discussion about technology and innovation over a full-length episode.",
                 words=[WordTimestamp(word="Long", start=0.0, end=0.5)],
             )
         ],
@@ -54,7 +54,7 @@ def mock_viral_clip_youtube():
         reason="Informative content with clear narrative",
         viral_score=8.5,
         start_time=10.0,
-        end_time=370.0,  # 360s = 6 min (within youtube 5–20 min range)
+        end_time=970.0,  # 960s = 16 min (within youtube 15–25 min range)
         description="Deep dive into tech innovation",
         hashtags=["#tech", "#innovation"],
         thumbnail_idea="Speaker with confident expression discussing technology",

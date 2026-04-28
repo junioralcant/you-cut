@@ -198,7 +198,7 @@ O comando `youcut cuts` é o ponto de entrada para gerar cortes otimizados por I
 
 | Modo | Formato | Destino | Duração dos clipes |
 |---|---|---|---|
-| **YouTube** | Paisagem 16:9 | Canal do YouTube | 5–20 min (definida pela IA) |
+| **YouTube** | Paisagem 16:9 | Canal do YouTube | 15–25 min (definida pela IA) |
 | **Redes sociais** | Vertical 9:16 | TikTok, Reels, Shorts | Até ~3 min (definida pela IA) |
 
 O fluxo completo é interativo — basta rodar e responder às perguntas:
@@ -357,6 +357,7 @@ youcut auth status
 Observação importante:
 
 - apps do TikTok não auditados publicam vídeos como `private`; para postagem pública é necessário que o app passe pela auditoria do TikTok.
+- deixar a conta do TikTok como privada não troca automaticamente o fluxo de upload para postagem direta. Se `TIKTOK_POST_MODE` continuar como `draft`, o YouCut seguirá usando a inbox do TikTok.
 - para publicar direto pela API em vez de enviar para rascunho, use `TIKTOK_POST_MODE=direct` e refaça `youcut auth login --platform tiktok` para obter o escopo `video.publish`.
 - no modo `direct`, o YouCut envia `privacy_level` ao TikTok. O padrão seguro é `SELF_ONLY`, mas você pode sobrescrever com `TIKTOK_PRIVACY_LEVEL=PUBLIC_TO_EVERYONE`, `MUTUAL_FOLLOW_FRIENDS`, `FOLLOWER_OF_CREATOR` ou `SELF_ONLY`, desde que essa opção esteja liberada para a conta conectada.
 - opcionalmente, você pode controlar interações com `TIKTOK_DISABLE_COMMENT`, `TIKTOK_DISABLE_DUET` e `TIKTOK_DISABLE_STITCH` (`true` ou `false`).
@@ -454,7 +455,7 @@ tests/
 ### Comando `cuts` (cortes inteligentes)
 
 - `video_metadata.py`: extrai título e duração do vídeo sem download completo (via `yt-dlp`)
-- `analyzer.py`: modo `youtube` (5–20 min, 16:9) ou `social` (até 3 min, 9:16) com prompts parametrizados
+- `analyzer.py`: modo `youtube` (15–25 min, 16:9) ou `social` (até 3 min, 9:16) com prompts parametrizados
 - `clipper.py`: stream copy sem re-encoding para modo `youtube`; filtro vertical para modo `social`
 - `thumbnail_generator.py`: gera thumbnails via DALL-E 3 (modo `youtube` com `OPENAI_API_KEY`)
 - `reviewer.py`: revisão interativa via terminal com aprovação, edição de título e regeneração de thumbnail

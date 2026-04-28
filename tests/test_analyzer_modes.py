@@ -6,6 +6,9 @@ import pytest
 from youcut.analyzer import (
     SOCIAL_MAX_DURATION,
     SOCIAL_MIN_DURATION,
+    YOUTUBE_TITLE_IDEAL_MAX_CHARS,
+    YOUTUBE_TITLE_MAX_WORDS,
+    YOUTUBE_TITLE_MIN_WORDS,
     YOUTUBE_MAX_DURATION,
     YOUTUBE_MIN_DURATION,
     analyze,
@@ -181,6 +184,18 @@ class TestPromptContainsModeSpecificLimits:
         assert str(YOUTUBE_MIN_DURATION) in system_text
         assert str(YOUTUBE_MAX_DURATION) in system_text
 
+    def test_youtube_prompt_contains_title_guidance(self, youtube_config, transcription):
+        mock_client = _make_mock_client([])
+
+        with patch("youcut.analyzer.anthropic.Anthropic", return_value=mock_client):
+            analyze(transcription, youtube_config)
+
+        system_text = self._get_system_prompt_text(mock_client)
+        assert f"{YOUTUBE_TITLE_MIN_WORDS}" in system_text
+        assert f"{YOUTUBE_TITLE_MAX_WORDS}" in system_text
+        assert f"{YOUTUBE_TITLE_IDEAL_MAX_CHARS}" in system_text
+        assert "pode ultrapassar" in system_text
+
 
 class TestMaxClips:
     def test_max_clips_limits_results(self, social_config, transcription):
@@ -239,6 +254,17 @@ class TestCutModeOnClips:
 
         assert len(result) == 1
         assert result[0].cut_mode == "youtube"
+
+    def test_youtube_title_above_ideal_limit_is_still_accepted(self, youtube_config, transcription):
+        long_title = "Esse titulo passa um pouco do limite ideal"
+        clips_data = [_clip(long_title, 0.0, float(YOUTUBE_MIN_DURATION))]
+        mock_client = _make_mock_client(clips_data)
+
+        with patch("youcut.analyzer.anthropic.Anthropic", return_value=mock_client):
+            result = analyze(transcription, youtube_config)
+
+        assert len(result) == 1
+        assert result[0].title == long_title
 
     def test_all_returned_clips_have_cut_mode(self, social_config, transcription):
         clips_data = [_clip(f"C{i}", i * 30.0, (i + 1) * 30.0) for i in range(3)]

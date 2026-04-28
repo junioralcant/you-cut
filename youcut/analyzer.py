@@ -1,3 +1,5 @@
+import logging
+
 import anthropic
 
 from youcut.config import PipelineConfig
@@ -8,12 +10,18 @@ CHUNK_DURATION = 30 * 60  # 30 minutes in seconds
 SOCIAL_MIN_DURATION = 15
 SOCIAL_MAX_DURATION = 180
 
-YOUTUBE_MIN_DURATION = 300
-YOUTUBE_MAX_DURATION = 1200
+YOUTUBE_MIN_DURATION = 900
+YOUTUBE_MAX_DURATION = 1500
 
 # Backward-compat aliases — social is the legacy default
 MIN_CLIP_DURATION = SOCIAL_MIN_DURATION
 MAX_CLIP_DURATION = SOCIAL_MAX_DURATION
+
+YOUTUBE_TITLE_MIN_WORDS = 5
+YOUTUBE_TITLE_MAX_WORDS = 9
+YOUTUBE_TITLE_IDEAL_MAX_CHARS = 30
+
+logger = logging.getLogger(__name__)
 
 
 def _get_duration_limits(cut_mode: CutMode) -> tuple[int, int]:
@@ -26,9 +34,17 @@ def _build_system_prompt(cut_mode: CutMode, min_dur: int, max_dur: int) -> str:
     if cut_mode == "youtube":
         audience = "YouTube (vídeos longos em paisagem 16:9)"
         style = "informativos, aprofundados e com começo, meio e fim bem definidos"
+        title_rule = (
+            f"- O título de cada clipe deve ter idealmente entre {YOUTUBE_TITLE_MIN_WORDS} e "
+            f"{YOUTUBE_TITLE_MAX_WORDS} palavras\n"
+            f"- Prefira títulos com até {YOUTUBE_TITLE_IDEAL_MAX_CHARS} caracteres, mas pode "
+            "ultrapassar quando isso deixar o título mais claro e natural\n"
+            "- Evite clickbait genérico e priorize clareza editorial"
+        )
     else:
         audience = "redes sociais (Shorts, Reels, TikTok)"
         style = "virais e de alto impacto"
+        title_rule = "- O título deve ser curto, chamativo e adequado para redes sociais"
 
     duration_rule = f"entre {min_dur} e {max_dur} segundos"
 
@@ -50,6 +66,7 @@ REGRAS OBRIGATÓRIAS:
 - O viral_score deve ser um número de 0 a 10
 - Retorne apenas os timestamps precisos encontrados na transcrição
 - Os clipes NÃO devem se sobrepor (sem repetição de conteúdo entre clipes)
+{title_rule}
 """
 
 
@@ -72,7 +89,13 @@ _VIRAL_TOOL = {
                     "properties": {
                         "title": {
                             "type": "string",
-                            "description": "Título chamativo estilo redes sociais",
+                            "description": (
+                                "Título do clipe. Em modo youtube: título editorial claro, idealmente "
+                                f"com {YOUTUBE_TITLE_MIN_WORDS} a {YOUTUBE_TITLE_MAX_WORDS} palavras "
+                                f"e preferencialmente até {YOUTUBE_TITLE_IDEAL_MAX_CHARS} caracteres, "
+                                "podendo ultrapassar esse teto quando necessário. "
+                                "Em modo social: título curto e chamativo."
+                            ),
                         },
                         "reason": {
                             "type": "string",
@@ -159,6 +182,41 @@ def _build_user_prompt(segments, max_clips: int | None) -> str:
     return prefix + transcription_text
 
 
+def _normalize_clip_title(title: str) -> str:
+    return " ".join(title.split())
+
+
+def _count_words(text: str) -> int:
+    return len([word for word in text.split(" ") if word])
+
+
+def _log_title_guidance(clip: ViralClip) -> None:
+    if clip.cut_mode != "youtube":
+        return
+
+    word_count = _count_words(clip.title)
+    char_count = len(clip.title)
+
+    if (
+        YOUTUBE_TITLE_MIN_WORDS <= word_count <= YOUTUBE_TITLE_MAX_WORDS
+        and char_count <= YOUTUBE_TITLE_IDEAL_MAX_CHARS
+    ):
+        return
+
+    logger.info(
+        (
+            "Título fora da faixa ideal para YouTube longo: '%s' "
+            "(%d palavras, %d caracteres; alvo %d-%d palavras, ideal até %d caracteres)"
+        ),
+        clip.title,
+        word_count,
+        char_count,
+        YOUTUBE_TITLE_MIN_WORDS,
+        YOUTUBE_TITLE_MAX_WORDS,
+        YOUTUBE_TITLE_IDEAL_MAX_CHARS,
+    )
+
+
 def _analyze_chunk(
     client: anthropic.Anthropic,
     segments: list,
@@ -208,9 +266,11 @@ def _analyze_chunk(
             for raw in block.input.get("clips", []):
                 try:
                     raw.pop("cut_mode", None)
+                    raw["title"] = _normalize_clip_title(raw.get("title", ""))
                     clip = ViralClip(**raw, cut_mode=cut_mode)
                     duration = clip.end_time - clip.start_time
                     if min_dur <= duration <= max_dur:
+                        _log_title_guidance(clip)
                         clips.append(clip)
                 except Exception:
                     continue

@@ -68,6 +68,18 @@ def _extract_response_error(payload: object) -> str | None:
     return f"{code}: {message}"
 
 
+def _format_post_init_error(error: str, post_mode: str) -> str:
+    if post_mode == _POST_MODE_DRAFT and "spam_risk_too_many_pending_share" in error:
+        return (
+            "Init failed: TikTok bloqueou novos envios para a inbox porque ha rascunhos/compartilhamentos "
+            "pendentes demais nessa conta. Conta privada por si so nao muda o fluxo de inbox. "
+            "Para publicar direto pela API, configure TIKTOK_POST_MODE=direct e refaca "
+            "`youcut auth login --platform tiktok` para conceder o escopo video.publish. "
+            "Se quiser continuar no modo draft, limpe os pendentes na inbox do TikTok antes de tentar de novo."
+        )
+    return f"Init failed: {error}"
+
+
 def _get_video_duration_seconds(video_path: Path) -> float | None:
     try:
         result = subprocess.run(
@@ -565,7 +577,7 @@ class TikTokUploader(Uploader):
             json_body=payload,
         )
         if error:
-            return None, None, f"Init failed: {error}"
+            return None, None, _format_post_init_error(error, self._post_mode)
 
         data = response_payload.get("data", {})
         publish_id = data.get("publish_id")
