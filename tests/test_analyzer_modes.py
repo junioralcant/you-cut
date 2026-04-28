@@ -6,6 +6,7 @@ import pytest
 from youcut.analyzer import (
     SOCIAL_MAX_DURATION,
     SOCIAL_MIN_DURATION,
+    YOUTUBE_FALLBACK_MIN_DURATION,
     YOUTUBE_TITLE_IDEAL_MAX_CHARS,
     YOUTUBE_TITLE_MAX_WORDS,
     YOUTUBE_TITLE_MIN_WORDS,
@@ -131,10 +132,24 @@ class TestYouTubeModeLimits:
         dur = result[0].end_time - result[0].start_time
         assert YOUTUBE_MIN_DURATION <= dur <= YOUTUBE_MAX_DURATION
 
-    def test_youtube_clips_below_min_filtered(self, youtube_config, transcription):
+    def test_youtube_clips_below_ideal_min_are_accepted_as_fallback(self, youtube_config, transcription):
         clips_data = [
-            _clip("Short", 0.0, YOUTUBE_MIN_DURATION - 1, score=9.0),
-            _clip("Valid", 0.0, float(YOUTUBE_MIN_DURATION), score=8.0),
+            _clip("Fallback", 0.0, float(YOUTUBE_FALLBACK_MIN_DURATION), score=9.0),
+            _clip("Valid", float(YOUTUBE_FALLBACK_MIN_DURATION), float(YOUTUBE_FALLBACK_MIN_DURATION + YOUTUBE_MIN_DURATION), score=8.0),
+        ]
+        mock_client = _make_mock_client(clips_data)
+
+        with patch("youcut.analyzer.anthropic.Anthropic", return_value=mock_client):
+            result = analyze(transcription, youtube_config)
+
+        assert len(result) == 2
+        assert result[0].title == "Valid"
+        assert result[1].title == "Fallback"
+
+    def test_youtube_clips_below_fallback_min_are_filtered(self, youtube_config, transcription):
+        clips_data = [
+            _clip("Too Short", 0.0, YOUTUBE_FALLBACK_MIN_DURATION - 1, score=9.0),
+            _clip("Fallback", 0.0, float(YOUTUBE_FALLBACK_MIN_DURATION), score=8.0),
         ]
         mock_client = _make_mock_client(clips_data)
 
@@ -142,7 +157,7 @@ class TestYouTubeModeLimits:
             result = analyze(transcription, youtube_config)
 
         assert len(result) == 1
-        assert result[0].title == "Valid"
+        assert result[0].title == "Fallback"
 
     def test_youtube_clips_above_max_filtered(self, youtube_config, transcription):
         clips_data = [
@@ -183,6 +198,7 @@ class TestPromptContainsModeSpecificLimits:
         system_text = self._get_system_prompt_text(mock_client)
         assert str(YOUTUBE_MIN_DURATION) in system_text
         assert str(YOUTUBE_MAX_DURATION) in system_text
+        assert str(YOUTUBE_FALLBACK_MIN_DURATION) in system_text
 
     def test_youtube_prompt_contains_title_guidance(self, youtube_config, transcription):
         mock_client = _make_mock_client([])
@@ -265,6 +281,19 @@ class TestCutModeOnClips:
 
         assert len(result) == 1
         assert result[0].title == long_title
+
+    def test_youtube_ideal_clips_are_prioritized_over_shorter_fallbacks(self, youtube_config, transcription):
+        clips_data = [
+            _clip("Fallback Mais Viral", 0.0, float(YOUTUBE_FALLBACK_MIN_DURATION), score=9.8),
+            _clip("Ideal Menos Viral", 0.0, float(YOUTUBE_MIN_DURATION), score=8.0),
+        ]
+        mock_client = _make_mock_client(clips_data)
+
+        with patch("youcut.analyzer.anthropic.Anthropic", return_value=mock_client):
+            result = analyze(transcription, youtube_config)
+
+        assert len(result) == 1
+        assert result[0].title == "Ideal Menos Viral"
 
     def test_all_returned_clips_have_cut_mode(self, social_config, transcription):
         clips_data = [_clip(f"C{i}", i * 30.0, (i + 1) * 30.0) for i in range(3)]

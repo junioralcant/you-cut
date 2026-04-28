@@ -12,6 +12,7 @@ SOCIAL_MAX_DURATION = 180
 
 YOUTUBE_MIN_DURATION = 900
 YOUTUBE_MAX_DURATION = 1500
+YOUTUBE_FALLBACK_MIN_DURATION = 300
 
 # Backward-compat aliases — social is the legacy default
 MIN_CLIP_DURATION = SOCIAL_MIN_DURATION
@@ -30,10 +31,34 @@ def _get_duration_limits(cut_mode: CutMode) -> tuple[int, int]:
     return SOCIAL_MIN_DURATION, SOCIAL_MAX_DURATION
 
 
+def _is_youtube_ideal_duration(duration: float) -> bool:
+    return YOUTUBE_MIN_DURATION <= duration <= YOUTUBE_MAX_DURATION
+
+
+def _is_valid_duration(cut_mode: CutMode, duration: float) -> bool:
+    if cut_mode == "youtube":
+        return YOUTUBE_FALLBACK_MIN_DURATION <= duration <= YOUTUBE_MAX_DURATION
+    return SOCIAL_MIN_DURATION <= duration <= SOCIAL_MAX_DURATION
+
+
+def _clip_sort_key(clip: ViralClip) -> tuple[int, float]:
+    duration = clip.end_time - clip.start_time
+    if clip.cut_mode == "youtube":
+        priority = 0 if _is_youtube_ideal_duration(duration) else 1
+        return priority, -clip.viral_score
+    return 0, -clip.viral_score
+
+
 def _build_system_prompt(cut_mode: CutMode, min_dur: int, max_dur: int) -> str:
     if cut_mode == "youtube":
         audience = "YouTube (vídeos longos em paisagem 16:9)"
         style = "informativos, aprofundados e com começo, meio e fim bem definidos"
+        duration_rule = (
+            f"idealmente entre {min_dur} e {max_dur} segundos; "
+            f"se não houver trechos fortes nessa faixa, você pode retornar clipes menores, "
+            f"desde que tenham pelo menos {YOUTUBE_FALLBACK_MIN_DURATION} segundos e ainda "
+            "façam sentido como vídeo completo para YouTube"
+        )
         title_rule = (
             f"- O título de cada clipe deve ter idealmente entre {YOUTUBE_TITLE_MIN_WORDS} e "
             f"{YOUTUBE_TITLE_MAX_WORDS} palavras\n"
@@ -44,9 +69,8 @@ def _build_system_prompt(cut_mode: CutMode, min_dur: int, max_dur: int) -> str:
     else:
         audience = "redes sociais (Shorts, Reels, TikTok)"
         style = "virais e de alto impacto"
+        duration_rule = f"entre {min_dur} e {max_dur} segundos"
         title_rule = "- O título deve ser curto, chamativo e adequado para redes sociais"
-
-    duration_rule = f"entre {min_dur} e {max_dur} segundos"
 
     return f"""\
 Você é um especialista em criação de conteúdo {style} para {audience}.
@@ -269,7 +293,7 @@ def _analyze_chunk(
                     raw["title"] = _normalize_clip_title(raw.get("title", ""))
                     clip = ViralClip(**raw, cut_mode=cut_mode)
                     duration = clip.end_time - clip.start_time
-                    if min_dur <= duration <= max_dur:
+                    if _is_valid_duration(cut_mode, duration):
                         _log_title_guidance(clip)
                         clips.append(clip)
                 except Exception:
@@ -301,7 +325,7 @@ def analyze(transcription: TranscriptionResult, config: PipelineConfig) -> list[
                 clips.extend(_analyze_chunk(client, chunk_segs, config, cut_mode, max_clips))
             chunk_start = chunk_end
 
-    clips.sort(key=lambda c: c.viral_score, reverse=True)
+    clips.sort(key=_clip_sort_key)
     clips = _remove_overlapping(clips)
 
     if max_clips is not None:

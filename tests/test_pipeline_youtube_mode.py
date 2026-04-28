@@ -64,6 +64,22 @@ def mock_viral_clip_youtube():
 
 
 @pytest.fixture
+def mock_viral_clip_youtube_short():
+    return ViralClip(
+        title="Shorter Tech Breakdown",
+        reason="Strong standalone section under the ideal window",
+        viral_score=8.1,
+        start_time=980.0,
+        end_time=1520.0,  # 540s = 9 min fallback below 15 min
+        description="Relevant YouTube fallback clip",
+        hashtags=["#tech", "#analysis"],
+        thumbnail_idea="Speaker making a key point mid-episode",
+        thumbnail_text="MOMENTO IMPACTANTE",
+        cut_mode="youtube",
+    )
+
+
+@pytest.fixture
 def video_path(tmp_path):
     p = tmp_path / "downloads" / "test_video.mp4"
     p.parent.mkdir(parents=True, exist_ok=True)
@@ -201,6 +217,35 @@ class TestFlowAYouTubeClipFormat:
         assert len(cut_calls) == 1
         # The clip passed to cut_clip must have cut_mode="youtube"
         assert cut_calls[0].cut_mode == "youtube"
+
+    def test_flow_a_shows_guidance_when_shorter_youtube_fallbacks_exist(
+        self,
+        youtube_config,
+        mock_transcription,
+        mock_viral_clip_youtube,
+        mock_viral_clip_youtube_short,
+        video_path,
+        clip_path,
+    ):
+        with (
+            patch("youcut.cli.download_video", return_value=video_path),
+            patch("youcut.cli.transcribe", return_value=mock_transcription),
+            patch("youcut.cli.analyze", return_value=[mock_viral_clip_youtube, mock_viral_clip_youtube_short]),
+            patch("youcut.cli.cut_clip", return_value=clip_path),
+            patch("youcut.cli.save_session", return_value=Path("/tmp/s.json")),
+            patch("youcut.cli.generate_thumbnail", return_value=clip_path),
+            patch("youcut.cli._console.print") as mock_print,
+        ):
+            from youcut.cli import run_flow_a
+            run_flow_a(
+                "https://youtube.com/watch?v=test",
+                youtube_config,
+                skip_review=True,
+                upload=False,
+            )
+
+        printed = " ".join(str(call.args[0]) for call in mock_print.call_args_list if call.args)
+        assert "menores que 15 min" in printed
 
     def test_thumbnail_always_generated(
         self, tmp_path, monkeypatch, mock_transcription, mock_viral_clip_youtube, video_path, clip_path

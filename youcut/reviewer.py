@@ -9,6 +9,7 @@ from youcut.models import ClipRecord, CutMode, ViralClip
 logger = logging.getLogger(__name__)
 
 _console = Console()
+_YOUTUBE_TITLE_HINT = "Alvo: 5-9 palavras; idealmente ate 30 caracteres; pode passar se ficar melhor."
 
 
 def review_clips(
@@ -43,7 +44,10 @@ def review_clips(
                 break
             elif action == "Editar título":
                 old_title = record.title
-                new_title = questionary.text("Novo título:", default=record.title).ask()
+                prompt = "Novo título:"
+                if cut_mode == "youtube":
+                    prompt = f"{prompt} {_YOUTUBE_TITLE_HINT}"
+                new_title = questionary.text(prompt, default=record.title).ask()
                 if new_title:
                     record.title = new_title
                     logger.info("Título editado: '%s' → '%s'", old_title, record.title)

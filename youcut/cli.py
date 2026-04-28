@@ -17,7 +17,7 @@ from rich.panel import Panel
 from rich.progress import Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 from rich.table import Table
 
-from youcut.analyzer import analyze
+from youcut.analyzer import YOUTUBE_MIN_DURATION, analyze
 from youcut.captioner import add_captions
 from youcut.clipper import cut_clip
 from youcut.face_tracker import apply_face_tracking
@@ -264,6 +264,8 @@ def _run_single_source_pipeline(
             progress.stop()
             _console.print("[yellow]Nenhum trecho relevante identificado.[/yellow]")
             return []
+        if config.cut_mode == "youtube":
+            _show_youtube_duration_guidance(viral_clips)
 
         if config.dry_run:
             progress.stop()
@@ -823,6 +825,32 @@ def _extract_cut_result(cut_result: Path | CaptionBurnResult) -> tuple[Path, boo
     return cut_result, True, None
 
 
+def _show_youtube_duration_guidance(clips: list[ViralClip]) -> None:
+    ideal_count = sum(1 for clip in clips if (clip.end_time - clip.start_time) >= YOUTUBE_MIN_DURATION)
+    fallback_count = len(clips) - ideal_count
+
+    if fallback_count <= 0:
+        return
+
+    if ideal_count == 0:
+        _console.print(
+            (
+                "[yellow]Não encontrei clipes na faixa prioritária de 15 a 25 min. "
+                f"Vou seguir com {fallback_count} sugestão(ões) menores que 15 min que também "
+                "podem ser aprovadas e enviadas.[/yellow]"
+            )
+        )
+        return
+
+    _console.print(
+        (
+            "[cyan]Além dos clipes prioritários de 15 a 25 min, encontrei "
+            f"{fallback_count} sugestão(ões) menores que 15 min que também podem ser aprovadas "
+            "e enviadas.[/cyan]"
+        )
+    )
+
+
 def run_flow_a(
     source: str,
     config: PipelineConfig,
@@ -878,6 +906,8 @@ def run_flow_a(
             progress.stop()
             _console.print("[yellow]Nenhum trecho relevante identificado.[/yellow]")
             return None
+        if config.cut_mode == "youtube":
+            _show_youtube_duration_guidance(viral_clips)
 
         clip_paths: list[Path] = []
         task_cut = progress.add_task("Cortando clipes (stream copy 16:9)...", total=len(viral_clips))
@@ -1183,6 +1213,8 @@ def run_flow_c(
             progress.stop()
             _console.print("[yellow]Nenhum trecho relevante identificado.[/yellow]")
             return
+        if config.cut_mode == "youtube":
+            _show_youtube_duration_guidance(viral_clips)
 
         clip_paths: list[Path] = []
         caption_statuses: list[tuple[bool, str | None]] = []

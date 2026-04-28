@@ -323,6 +323,7 @@ class TestSummaryTable:
         assert "Dry Run Clip" in result.output or "7.3" in result.output
 
 
+
 # ---------------------------------------------------------------------------
 # 8.7 — Error handling
 # ---------------------------------------------------------------------------
