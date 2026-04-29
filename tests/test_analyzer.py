@@ -104,6 +104,9 @@ class TestAnalyzeMapping:
             "hashtags": ["#a", "#b"],
             "thumbnail_idea": "Ideia Thumbnail",
             "thumbnail_text": "MOMENTO IMPACTANTE",
+            "social_hook_title": "ALERTA TOTAL",
+            "social_image_prompt": "Cena editorial de tensão política sem texto",
+            "social_visual_style": "claro e vivo",
         }
         mock_client = _make_mock_client([raw])
 
@@ -120,6 +123,31 @@ class TestAnalyzeMapping:
         assert clip.hashtags == raw["hashtags"]
         assert clip.thumbnail_idea == raw["thumbnail_idea"]
         assert clip.thumbnail_text == raw["thumbnail_text"]
+        assert clip.social_hook_title == raw["social_hook_title"]
+        assert clip.social_image_prompt == raw["social_image_prompt"]
+        assert clip.social_visual_style == raw["social_visual_style"]
+
+    def test_social_fields_are_derived_when_missing(self, config, short_transcription):
+        raw = {
+            "title": "Título Social Teste",
+            "reason": "Momento forte sobre crise política",
+            "viral_score": 7.5,
+            "start_time": 10.0,
+            "end_time": 40.0,
+            "description": "Descrição Teste",
+            "hashtags": ["#a", "#b"],
+            "thumbnail_idea": "Debate acalorado em estúdio",
+            "thumbnail_text": "MOMENTO IMPACTANTE",
+        }
+        mock_client = _make_mock_client([raw])
+
+        with patch("youcut.analyzer.anthropic.Anthropic", return_value=mock_client):
+            result = analyze(short_transcription, config)
+
+        clip = result[0]
+        assert clip.social_hook_title == "TÍTULO SOCIAL TESTE"
+        assert "Debate acalorado em estúdio" in clip.social_image_prompt
+        assert clip.social_visual_style
 
     def test_thumbnail_text_is_normalized_to_prd_style(self, config, short_transcription):
         raw = {

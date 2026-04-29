@@ -106,6 +106,26 @@ class TestBurnSuccess:
         assert result.warning is None
 
     @patch("youcut.caption_burner.subprocess.run")
+    def test_burn_bottom_panel_uses_dedicated_margin(self, mock_run, tmp_path):
+        burner = CaptionBurner()
+        video = tmp_path / "clip.mp4"
+        video.write_bytes(b"\x00" * 10)
+
+        with patch.object(burner, "_transcribe_words", return_value=[{"word": "Hello", "start": 0.0, "end": 0.5}]):
+            mock_run.side_effect = [
+                MagicMock(returncode=0, stdout="1080x1920"),
+                MagicMock(returncode=0),
+            ]
+            (tmp_path / "clip_captioned.mp4").write_bytes(b"\x00" * 10)
+            burner.burn(video, layout_mode="bottom_panel")
+
+        cmd = mock_run.call_args_list[1][0][0]
+        vf = cmd[cmd.index("-vf") + 1]
+        assert "original_size=1080x1920" in vf
+        assert "FontSize=16" in vf
+        assert "MarginV=40" in vf
+
+    @patch("youcut.caption_burner.subprocess.run")
     def test_burn_output_has_captioned_suffix(self, mock_run, tmp_path):
         burner = CaptionBurner()
         video = tmp_path / "my_clip.mp4"

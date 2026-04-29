@@ -36,6 +36,15 @@ class PipelineConfig(BaseSettings):
     huggingface_token: str | None = None
     face_detection_confidence: float = 0.5
     thumbnail_text: str = ""
+    social_layout_mode: Literal["classic", "speaker_bottom_ai_top"] = "classic"
+    social_layout_title_enabled: bool = True
+    social_layout_image_provider: Literal["openai", "local"] = "openai"
+    social_layout_apply_face_tracking: bool = True
+    social_layout_top_image_height: int = 860
+    social_layout_title_band_height: int = 180
+    social_layout_title_color_mode: Literal["engagement_default", "yellow", "orange", "custom"] = "engagement_default"
+    social_layout_title_bg_color: str = "#F4C400"
+    social_layout_title_text_color: str = "#111111"
 
     @model_validator(mode="after")
     def validate_api_key_present(self) -> "PipelineConfig":

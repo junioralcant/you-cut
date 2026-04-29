@@ -108,6 +108,9 @@ class ViralClip(BaseModel):
     hashtags: list[str]
     thumbnail_idea: str
     thumbnail_text: str = ""
+    social_hook_title: str = ""
+    social_image_prompt: str = ""
+    social_visual_style: str = ""
     cut_mode: CutMode = "social"
 
     @field_validator("viral_score")

@@ -52,7 +52,7 @@ def cut_clip(
         logger.error("FFmpeg falhou (código %d): %s", e.returncode, stderr)
         raise
 
-    if clip.cut_mode == "social":
+    if clip.cut_mode == "social" and config.social_layout_mode == "classic":
         output_path = CaptionBurner().burn(output_path, style="word")
 
     return output_path

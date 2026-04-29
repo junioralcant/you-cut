@@ -48,6 +48,9 @@ def test_viral_clip_default_thumbnail_text_is_empty():
         thumbnail_idea="Frame com expressão de surpresa no segundo 35",
     )
     assert clip.thumbnail_text == ""
+    assert clip.social_hook_title == ""
+    assert clip.social_image_prompt == ""
+    assert clip.social_visual_style == ""
 
 
 def test_thumbnail_frame_result_default_methods_are_local(tmp_path):

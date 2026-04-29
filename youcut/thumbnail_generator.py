@@ -70,6 +70,48 @@ def generate_thumbnail(
     return result.output_path
 
 
+def generate_social_top_image(
+    clip: ViralClip,
+    output_dir: Path,
+    clip_path: Path,
+    config: "PipelineConfig | None" = None,
+) -> Path:
+    social_dir = output_dir / "social_images"
+    social_dir.mkdir(parents=True, exist_ok=True)
+    output_path = social_dir / f"{clip_path.stem}_top.png"
+
+    anthropic_client, openai_client = _build_ai_clients(config)
+    openai_api_key = _resolve_openai_api_key(config, openai_client)
+
+    try:
+        frames = _extract_frames_candidates(clip_path, n_frames=6)
+        selected_timestamp, _, _ = _select_best_local_candidate(frames)
+        reference_frames = _select_generation_reference_frames(frames, selected_timestamp, max_frames=4)
+        fallback_frame = reference_frames[0]
+    except Exception as exc:
+        logger.warning("Falha ao preparar referências do clipe social; usando frame simples: %s", exc)
+        fallback_frame = _extract_frame(clip_path)
+        reference_frames = [fallback_frame]
+
+    prompt = _build_social_image_generation_prompt(
+        clip,
+        transcript_visual_context=_build_transcript_visual_context(clip_path, clip.title, anthropic_client),
+    )
+
+    image_bytes, generation_method = _generate_social_image_bytes(
+        prompt=prompt,
+        reference_frames=reference_frames,
+        fallback_frame_bytes=fallback_frame,
+        openai_client=openai_client,
+        openai_api_key=openai_api_key,
+        provider=getattr(config, "social_layout_image_provider", "openai") if config is not None else "openai",
+        target_size=(1080, getattr(config, "social_layout_top_image_height", 860) if config is not None else 860),
+    )
+    output_path.write_bytes(image_bytes)
+    logger.info("Imagem social superior gerada: method=%s output_path=%s", generation_method, output_path)
+    return output_path
+
+
 def regenerate_thumbnail(
     clip: ViralClip,
     clip_record: ClipRecord,
@@ -1022,6 +1064,34 @@ def _run_thumbnail_skill_script(
         return output_path.read_bytes()
 
 
+def _generate_social_image_bytes(
+    *,
+    prompt: str,
+    reference_frames: list[bytes],
+    fallback_frame_bytes: bytes,
+    openai_client: Any,
+    openai_api_key: str | None,
+    provider: str,
+    target_size: tuple[int, int],
+    timeout: float = 60.0,
+) -> tuple[bytes, str]:
+    if provider == "local" or openai_client is None:
+        logger.warning("Geração social por IA indisponível; usando fallback local")
+        return _resize_image_bytes(fallback_frame_bytes, target_size=target_size), "local"
+
+    try:
+        image_bytes = _run_thumbnail_skill_script(
+            prompt=prompt,
+            reference_frames=reference_frames,
+            openai_api_key=openai_api_key or _resolve_openai_api_key(None, openai_client),
+            timeout=timeout,
+        )
+        return _resize_image_bytes(image_bytes, target_size=target_size), "ai"
+    except Exception as exc:
+        logger.warning("Falha na geração da imagem social por IA; usando fallback local: %s", exc)
+        return _resize_image_bytes(fallback_frame_bytes, target_size=target_size), "local"
+
+
 @lru_cache(maxsize=1)
 def _load_thumbnail_prompt_context() -> str:
     context_parts: list[str] = []
@@ -1222,6 +1292,29 @@ def _build_thumbnail_generation_prompt(
     if transcript_visual_context:
         context_suffix += f" Transcript-derived subtle visual motifs: {transcript_visual_context}."
     return f"{base_prompt}{context_suffix}"
+
+
+def _build_social_image_generation_prompt(
+    clip: ViralClip,
+    transcript_visual_context: str = "",
+) -> str:
+    prompt_parts = [
+        "Create a strong editorial still image for the top half of a short-form vertical social video.",
+        "The image will occupy the top panel of a 1080x1920 composition.",
+        "Do not add any text, captions, logos, labels, watermarks, letters, numbers, headlines, newspaper text, signage, or readable typography.",
+        "Absolutely no readable text anywhere in the image.",
+        "If any source reference contains text, remove it or blur it until it becomes unreadable.",
+        "Prefer a clear, vivid, high-contrast editorial look with immediate readability on small screens.",
+        f"Main topic: {clip.title}.",
+        f"Editorial hook: {clip.social_hook_title or clip.title}.",
+        f"Visual prompt: {clip.social_image_prompt or clip.thumbnail_idea}.",
+        f"Visual style: {clip.social_visual_style or 'editorial claro e vivo, alto contraste'}."
+    ]
+    if clip.thumbnail_idea.strip():
+        prompt_parts.append(f"Reference idea: {clip.thumbnail_idea.strip()}.")
+    if transcript_visual_context.strip():
+        prompt_parts.append(f"Secondary symbolic cues: {transcript_visual_context.strip()}.")
+    return " ".join(part for part in prompt_parts if part).strip()
 
 
 def _read_text_if_exists(path: Path) -> str:

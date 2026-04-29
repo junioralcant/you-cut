@@ -138,6 +138,22 @@ def test_pipeline_config_new_fields_defaults(monkeypatch):
     assert config.max_clips is None
     assert config.openai_api_key is None
     assert config.session_timeout_minutes == 7
+    assert config.social_layout_mode == "classic"
+    assert config.social_layout_title_color_mode == "engagement_default"
+    assert config.social_layout_title_bg_color == "#F4C400"
+
+
+def test_pipeline_config_accepts_social_layout_overrides(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    from youcut.config import PipelineConfig
+    config = PipelineConfig(
+        social_layout_mode="speaker_bottom_ai_top",
+        social_layout_title_color_mode="orange",
+        social_layout_top_image_height=840,
+    )
+    assert config.social_layout_mode == "speaker_bottom_ai_top"
+    assert config.social_layout_title_color_mode == "orange"
+    assert config.social_layout_top_image_height == 840
 
 
 def test_pipeline_config_accepts_youtube_cut_mode(monkeypatch):

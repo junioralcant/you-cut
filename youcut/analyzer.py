@@ -23,6 +23,8 @@ YOUTUBE_TITLE_MIN_WORDS = 5
 YOUTUBE_TITLE_MAX_WORDS = 9
 YOUTUBE_TITLE_IDEAL_MAX_CHARS = 30
 THUMBNAIL_TEXT_MAX_WORDS = 6
+SOCIAL_HOOK_MAX_WORDS = 6
+_SOCIAL_VISUAL_STYLE_DEFAULT = "editorial claro e vivo, alto contraste, sem texto embutido"
 
 logger = logging.getLogger(__name__)
 
@@ -82,6 +84,16 @@ def _build_system_prompt(cut_mode: CutMode, min_dur: int, max_dur: int) -> str:
         "- Evite frases genéricas, clickbait vazio, aspas, emojis e pontuação desnecessária\n"
         "- Pense no thumbnail_text como texto embutido na thumbnail, não como título do vídeo"
     )
+    social_rule = ""
+    if cut_mode == "social":
+        social_rule = (
+            "- Gere também social_hook_title: um hook curto para a tarja fixa do clipe, com no máximo "
+            f"{SOCIAL_HOOK_MAX_WORDS} palavras\n"
+            "- Gere também social_image_prompt: um prompt visual editorial para a imagem do topo, coerente com o tema do trecho\n"
+            "- Gere também social_visual_style: direção visual curta para reforçar look claro, vivo e de alto contraste\n"
+            "- O social_hook_title deve ser independente do thumbnail_text\n"
+            "- O social_image_prompt deve evitar texto embutido na imagem\n"
+        )
 
     return f"""\
 Você é um especialista em criação de conteúdo {style} para {audience}.
@@ -103,6 +115,7 @@ REGRAS OBRIGATÓRIAS:
 - Os clipes NÃO devem se sobrepor (sem repetição de conteúdo entre clipes)
 {title_rule}
 {thumbnail_text_rule}
+{social_rule}
 """
 
 
@@ -169,6 +182,26 @@ _VIRAL_TOOL = {
                                 f"máximo de {THUMBNAIL_TEXT_MAX_WORDS} palavras, independente do título e diferente dele, "
                                 "baseado no tema central do clipe, editorial e impactante, sem clickbait genérico. "
                                 "Ex: 'CRISE NA DIREITA', 'MBL EM CHOQUE', 'PRESSÃO NO STF'"
+                            ),
+                        },
+                        "social_hook_title": {
+                            "type": "string",
+                            "description": (
+                                "Hook curto para a tarja fixa do clipe social. Máximo de "
+                                f"{SOCIAL_HOOK_MAX_WORDS} palavras, direto e independente do thumbnail_text."
+                            ),
+                        },
+                        "social_image_prompt": {
+                            "type": "string",
+                            "description": (
+                                "Prompt editorial para a imagem superior do clipe social, coerente com o tema do trecho "
+                                "e sem texto embutido."
+                            ),
+                        },
+                        "social_visual_style": {
+                            "type": "string",
+                            "description": (
+                                "Direção visual curta do clipe social. Preferir look claro, vivo, editorial e de alto contraste."
                             ),
                         },
                     },
@@ -276,6 +309,44 @@ def _count_words(text: str) -> int:
     return len([word for word in text.split(" ") if word])
 
 
+def _derive_social_hook_title(title: str, reason: str = "") -> str:
+    source = title or reason or "MOMENTO EM DESTAQUE"
+    tokens = [_normalize_thumbnail_token(token).upper() for token in source.split()]
+    filtered = [token for token in tokens if token]
+    return " ".join(filtered[:SOCIAL_HOOK_MAX_WORDS]).strip() or "MOMENTO EM DESTAQUE"
+
+
+def _normalize_social_hook_title(text: str, title: str, reason: str = "") -> str:
+    raw = _derive_social_hook_title(text, reason) if text.strip() else _derive_social_hook_title(title, reason)
+    tokens = [_normalize_thumbnail_token(token).upper() for token in raw.split()]
+    filtered = [token for token in tokens if token]
+    return " ".join(filtered[:SOCIAL_HOOK_MAX_WORDS]).strip() or "MOMENTO EM DESTAQUE"
+
+
+def _normalize_social_image_prompt(
+    prompt: str,
+    *,
+    title: str,
+    reason: str,
+    thumbnail_idea: str,
+    description: str,
+) -> str:
+    normalized = " ".join(prompt.split()).strip()
+    if normalized:
+        return normalized
+    base_parts = [title.strip(), reason.strip(), thumbnail_idea.strip(), description.strip()]
+    base = ". ".join(part for part in base_parts if part)
+    return (
+        f"{base}. Ilustração editorial forte, limpa, clara e viva, alto contraste, sem texto, "
+        "poucos elementos, leitura imediata em tela pequena."
+    ).strip()
+
+
+def _normalize_social_visual_style(style: str) -> str:
+    normalized = " ".join(style.split()).strip()
+    return normalized or _SOCIAL_VISUAL_STYLE_DEFAULT
+
+
 def _log_title_guidance(clip: ViralClip) -> None:
     if clip.cut_mode != "youtube":
         return
@@ -358,6 +429,21 @@ def _analyze_chunk(
                         raw["title"],
                         raw.get("reason", ""),
                         raw.get("thumbnail_idea", ""),
+                    )
+                    raw["social_hook_title"] = _normalize_social_hook_title(
+                        raw.get("social_hook_title", ""),
+                        raw["title"],
+                        raw.get("reason", ""),
+                    )
+                    raw["social_image_prompt"] = _normalize_social_image_prompt(
+                        raw.get("social_image_prompt", ""),
+                        title=raw["title"],
+                        reason=raw.get("reason", ""),
+                        thumbnail_idea=raw.get("thumbnail_idea", ""),
+                        description=raw.get("description", ""),
+                    )
+                    raw["social_visual_style"] = _normalize_social_visual_style(
+                        raw.get("social_visual_style", "")
                     )
                     clip = ViralClip(**raw, cut_mode=cut_mode)
                     duration = clip.end_time - clip.start_time

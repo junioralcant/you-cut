@@ -18,6 +18,7 @@ from rich.progress import Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 from rich.table import Table
 
 from youcut.analyzer import YOUTUBE_MIN_DURATION, analyze
+from youcut.caption_burner import CaptionBurner
 from youcut.captioner import add_captions
 from youcut.clipper import cut_clip
 from youcut.face_tracker import apply_face_tracking
@@ -29,6 +30,7 @@ from youcut.preview import generate_clip_preview
 from youcut.reviewer import review_clips
 from youcut.selector import prompt_clip_selection
 from youcut.session_store import list_sessions, save_session
+from youcut.social_composer import compose_social_clip
 from youcut.thumbnail_generator import generate_thumbnail
 from youcut.title_overlay import add_title_overlay
 from youcut.transcriber import transcribe
@@ -223,6 +225,8 @@ def _run_single_source_pipeline(
     clip_paths: list[Path] = []
     preview_paths: list[Optional[Path]] = []
     metadata_paths: list[Path] = []
+    captions_applied_flags: list[bool] = []
+    caption_warnings: list[str | None] = []
 
     with progress:
         task_dl = progress.add_task("Baixando vídeo...", total=None)
@@ -290,9 +294,21 @@ def _run_single_source_pipeline(
         progress.update(task_cut, description="[green]Clipes cortados[/green]")
 
         task_cap = progress.add_task("Adicionando legendas...", total=len(clip_paths))
-        for clip_path, clip in zip(clip_paths, viral_clips):
+        for index, (clip_path, clip) in enumerate(zip(clip_paths, viral_clips)):
             try:
-                add_captions(clip_path, transcription, clip, config)
+                if _is_editorial_social_layout(config):
+                    final_path, captions_applied, caption_warning = _finalize_editorial_social_clip(
+                        clip_path,
+                        clip,
+                        config,
+                    )
+                    clip_paths[index] = final_path
+                    captions_applied_flags.append(captions_applied)
+                    caption_warnings.append(caption_warning)
+                else:
+                    add_captions(clip_path, transcription, clip, config)
+                    captions_applied_flags.append(True)
+                    caption_warnings.append(None)
             except Exception as e:
                 progress.stop()
                 _err_console.print(
@@ -325,7 +341,12 @@ def _run_single_source_pipeline(
         progress.update(task_exp, description="[green]Metadados exportados[/green]")
 
     clip_records: list[ClipRecord] = []
-    for clip, clip_path in zip(viral_clips, clip_paths):
+    for clip, clip_path, captions_applied, caption_warning in zip(
+        viral_clips,
+        clip_paths,
+        captions_applied_flags,
+        caption_warnings,
+    ):
         clip_records.append(ClipRecord(
             title=clip.title,
             start_time=clip.start_time,
@@ -335,7 +356,8 @@ def _run_single_source_pipeline(
             approved=True,
             description=clip.description,
             hashtags=clip.hashtags,
-            captions_applied=True,
+            captions_applied=captions_applied,
+            caption_warning=caption_warning,
         ))
 
     if not skip_review:
@@ -435,6 +457,7 @@ def run(
             upload=upload,
             platforms=selected_platforms,
             clips=clips_filter,
+            social_layout_mode="speaker_bottom_ai_top",
         )
     except Exception as e:
         _err_console.print(
@@ -770,11 +793,25 @@ def _build_social_pipeline_config(
 ) -> PipelineConfig:
     """Normaliza o contrato de entrada do fluxo social pós-upload."""
     return PipelineConfig(
+        anthropic_api_key=base_config.anthropic_api_key if base_config else None,
+        openai_api_key=base_config.openai_api_key if base_config else None,
         cut_mode="social",
         subtitle_style="word",
         max_clips=base_config.max_clips if base_config else None,
         output_dir=output_dir or (base_config.output_dir if base_config else Path("output")),
         face_tracking=base_config.face_tracking if base_config else False,
+        social_layout_mode=(
+            base_config.social_layout_mode if base_config and base_config.social_layout_mode != "classic"
+            else "speaker_bottom_ai_top"
+        ),
+        social_layout_title_enabled=base_config.social_layout_title_enabled if base_config else True,
+        social_layout_image_provider=base_config.social_layout_image_provider if base_config else "openai",
+        social_layout_apply_face_tracking=base_config.social_layout_apply_face_tracking if base_config else True,
+        social_layout_top_image_height=base_config.social_layout_top_image_height if base_config else 860,
+        social_layout_title_band_height=base_config.social_layout_title_band_height if base_config else 180,
+        social_layout_title_color_mode=base_config.social_layout_title_color_mode if base_config else "engagement_default",
+        social_layout_title_bg_color=base_config.social_layout_title_bg_color if base_config else "#F4C400",
+        social_layout_title_text_color=base_config.social_layout_title_text_color if base_config else "#111111",
         huggingface_token=base_config.huggingface_token if base_config else None,
         face_detection_confidence=(
             base_config.face_detection_confidence if base_config else 0.5
@@ -823,6 +860,26 @@ def _extract_cut_result(cut_result: Path | CaptionBurnResult) -> tuple[Path, boo
     if isinstance(cut_result, CaptionBurnResult):
         return cut_result.output_path, cut_result.captions_applied, cut_result.warning
     return cut_result, True, None
+
+
+def _is_editorial_social_layout(config: PipelineConfig) -> bool:
+    return config.cut_mode == "social" and config.social_layout_mode == "speaker_bottom_ai_top"
+
+
+def _finalize_editorial_social_clip(
+    clip_path: Path,
+    clip: ViralClip,
+    config: PipelineConfig,
+) -> tuple[Path, bool, str | None]:
+    composed_path = clip_path
+    try:
+        logger.info("Social composer: generating top image for clip %s", clip_path.name)
+        composed_path = compose_social_clip(clip_path, clip, config)
+    except Exception as exc:
+        logger.warning("Social composer falhou; usando clipe base %s: %s", clip_path.name, exc)
+
+    result = CaptionBurner().burn(composed_path, style="word", layout_mode="bottom_panel")
+    return result.output_path, result.captions_applied, result.warning
 
 
 def _show_youtube_duration_guidance(clips: list[ViralClip]) -> None:
@@ -1099,7 +1156,11 @@ def run_flow_b(
                     )
                     logger.warning(warning_message)
                     _console.print(f"[yellow]! {warning_message}[/yellow]")
-                if social_config.cut_mode == "social" and social_config.face_tracking:
+                if (
+                    social_config.cut_mode == "social"
+                    and social_config.face_tracking
+                    and social_config.social_layout_apply_face_tracking
+                ):
                     logger.info("Aplicando face tracking ao clipe %s...", clip_path.name)
                     try:
                         tracked = apply_face_tracking(clip_path, social_config)
@@ -1112,6 +1173,10 @@ def run_flow_b(
                         logger.warning(
                             "Face tracking falhou com erro: %s — exportando clipe original.", ft_exc
                         )
+                if _is_editorial_social_layout(social_config):
+                    clip_path, captions_applied, caption_warning = _finalize_editorial_social_clip(
+                        clip_path, sc, social_config
+                    )
                 short_clip_results.append((clip_path, captions_applied, caption_warning))
             except Exception as e:
                 logger.warning("Erro ao cortar clipe %d: %s", i, e)
@@ -1224,7 +1289,11 @@ def run_flow_c(
             try:
                 clip_path = cut_clip(video_path, clip, i, config)
                 clip_path, captions_applied, caption_warning = _extract_cut_result(clip_path)
-                if config.cut_mode == "social" and config.face_tracking:
+                if (
+                    config.cut_mode == "social"
+                    and config.face_tracking
+                    and config.social_layout_apply_face_tracking
+                ):
                     logger.info("Aplicando face tracking ao clipe %s...", clip_path.name)
                     try:
                         tracked = apply_face_tracking(clip_path, config)
@@ -1238,6 +1307,10 @@ def run_flow_c(
                         logger.warning(
                             "Face tracking falhou com erro: %s — exportando clipe original.", ft_exc
                         )
+                if _is_editorial_social_layout(config):
+                    clip_path, captions_applied, caption_warning = _finalize_editorial_social_clip(
+                        clip_path, clip, config
+                    )
                 clip_paths.append(clip_path)
                 caption_statuses.append((captions_applied, caption_warning))
             except Exception as e:
@@ -1623,7 +1696,12 @@ def cuts(
 
     try:
         selected_platforms = _parse_platforms(platforms_raw) if upload else list(_SUPPORTED_PLATFORMS)
-        config = PipelineConfig(cut_mode=mode, max_clips=resolved_max_clips, thumbnail_text=thumbnail_text_value)
+        config = PipelineConfig(
+            cut_mode=mode,
+            max_clips=resolved_max_clips,
+            thumbnail_text=thumbnail_text_value,
+            social_layout_mode="speaker_bottom_ai_top" if mode == "social" else "classic",
+        )
     except Exception as e:
         _err_console.print(Panel(str(e), title="[red]Erro de Configuração[/red]", border_style="red"))
         raise typer.Exit(code=1)

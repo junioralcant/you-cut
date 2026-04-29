@@ -14,6 +14,11 @@ _SRT_FORCE_STYLE = (
     "PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,"
     "Outline=2,Alignment=2,MarginV=288"
 )
+_SRT_FORCE_STYLE_BOTTOM_PANEL = (
+    "FontName=Arial,Bold=1,FontSize=16,"
+    "PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,"
+    "Outline=1,Alignment=2,MarginV=40"
+)
 
 
 def _format_srt_time(seconds: float) -> str:
@@ -27,7 +32,12 @@ def _format_srt_time(seconds: float) -> str:
 
 
 class CaptionBurner:
-    def burn(self, video_path: Path, style: str = "word") -> CaptionBurnResult:
+    def burn(
+        self,
+        video_path: Path,
+        style: str = "word",
+        layout_mode: str | None = None,
+    ) -> CaptionBurnResult:
         try:
             words = self._transcribe_words(video_path)
         except Exception as exc:
@@ -43,7 +53,7 @@ class CaptionBurner:
             return CaptionBurnResult(output_path=video_path, captions_applied=False, warning=warning)
 
         try:
-            output_path = self._ffmpeg_burn(video_path, srt_path)
+            output_path = self._ffmpeg_burn(video_path, srt_path, layout_mode=layout_mode)
             return CaptionBurnResult(output_path=output_path, captions_applied=True)
         except Exception as exc:
             warning = f"FFmpeg falhou: {exc}"
@@ -88,18 +98,20 @@ class CaptionBurner:
         srt_path.write_text("\n".join(lines), encoding="utf-8")
         return srt_path
 
-    def _ffmpeg_burn(self, video_path: Path, srt_path: Path) -> Path:
+    def _ffmpeg_burn(self, video_path: Path, srt_path: Path, layout_mode: str | None = None) -> Path:
         out_path = video_path.with_stem(video_path.stem + "_captioned")
+        width, height = self._probe_video_dimensions(video_path)
 
         with tempfile.NamedTemporaryFile(suffix=".srt", delete=False, dir=tempfile.gettempdir()) as tmp:
             safe_srt = Path(tmp.name)
         safe_srt.write_bytes(srt_path.read_bytes())
 
         try:
+            force_style = _SRT_FORCE_STYLE_BOTTOM_PANEL if layout_mode == "bottom_panel" else _SRT_FORCE_STYLE
             cmd = [
                 "ffmpeg",
                 "-i", str(video_path),
-                "-vf", f"subtitles={safe_srt}:force_style='{_SRT_FORCE_STYLE}'",
+                "-vf", f"subtitles={safe_srt}:original_size={width}x{height}:force_style='{force_style}'",
                 "-c:v", "libx264",
                 "-c:a", "aac",
                 "-y",
@@ -110,3 +122,21 @@ class CaptionBurner:
             safe_srt.unlink(missing_ok=True)
 
         return out_path
+
+    def _probe_video_dimensions(self, video_path: Path) -> tuple[int, int]:
+        cmd = [
+            "ffprobe",
+            "-v", "error",
+            "-select_streams", "v:0",
+            "-show_entries", "stream=width,height",
+            "-of", "csv=p=0:s=x",
+            str(video_path),
+        ]
+        try:
+            result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+            raw = result.stdout.strip()
+            width_str, height_str = raw.split("x", maxsplit=1)
+            return int(width_str), int(height_str)
+        except Exception as exc:
+            logger.warning("CaptionBurner: ffprobe falhou para %s (%s), usando fallback 1080x1920.", video_path.name, exc)
+            return 1080, 1920
