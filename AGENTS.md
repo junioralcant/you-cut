@@ -1,0 +1,273 @@
+# AGENTS.md — YouCut
+
+Documento de contexto para LLMs que vão ler, modificar ou operar este repositório. O conteúdo aqui é descritivo do **estado atual do código**, não um manual de uso para humanos (esse fica em `README.md`).
+
+> **📐 Mapa arquivo a arquivo:** veja [`ARQUITETURA_GUIDE_LINES.md`](./ARQUITETURA_GUIDE_LINES.md) para uma descrição **explícita** do que cada arquivo do projeto faz (APIs públicas, dependências externas e papel no pipeline). Use-o como referência detalhada complementar a este documento.
+
+---
+
+## 1. Visão Geral
+
+**YouCut** é uma aplicação Python de **linha de comando** que automatiza a transformação de vídeos longos (lives, podcasts, palestras, vídeos longos do YouTube) em **clipes prontos para publicação**, usando IA em duas frentes principais:
+
+- **transcrição automática** com Whisper (`faster-whisper` ou `openai-whisper`);
+- **análise editorial** com Claude (Anthropic) para escolher trechos, gerar títulos, descrições, hashtags, ideias de thumbnail e prompts visuais;
+- **geração de thumbnail** com DALL·E 3 (OpenAI) e composição local com Pillow;
+- **upload automático** para YouTube, Instagram e TikTok.
+
+**Para que serve:** acelerar o fluxo de um criador de conteúdo que precisa transformar 1 vídeo longo em vários clipes (longos para YouTube, curtos para redes sociais) — desde o download até a publicação, com revisão opcional.
+
+- Linguagem: Python `>=3.11`
+- Empacotamento: `hatchling` via `pyproject.toml`
+- Entrypoint do CLI: `youcut = "youcut.cli:app"` (Typer)
+- Rendering ASS: requer `ffmpeg 8.1+` compilado com `--enable-libass`
+
+---
+
+## 2. Comandos Principais (CLI)
+
+O CLI é construído com `typer` e `rich`. Os subcomandos são:
+
+### `youcut run SOURCE`
+Pipeline **legado** focado em clipes virais curtos (9:16). Aceita URL do YouTube ou caminho local. Faz: download → transcrição → análise → corte → legendas → (opcional) overlay de título → metadados → (opcional) upload.
+
+Flags relevantes: `--clips`, `--clip-count/-n`, `--style {word,phrase}`, `--dry-run`, `--title-overlay`, `--upload`, `--platforms`, `--log-level`, `--log-file`.
+
+### `youcut cuts [SOURCE]`
+Pipeline **principal** ("Cortes Inteligentes"), interativo. Suporta dois modos selecionados pelo usuário (ou por flag):
+- **`youtube`** — clipes longos em paisagem `16:9`, duração ideal 15–25 min (mín. fallback 5 min), com geração de thumbnails via DALL·E 3.
+- **`social`** — clipes verticais `9:16` para TikTok / Reels / Shorts, até ~3 min.
+
+Subfluxos:
+- **Fluxo A**: cortes longos (modo `youtube`) com revisão e, ao final, oferta automática para gerar shorts a partir dos cortes recém-gerados.
+- **Fluxo B**: gera shorts a partir de cortes existentes, **sem reprocessar** o vídeo original (reusa transcrição cacheada e a sessão salva). Acessível também via `youcut cuts --history`.
+- **Fluxo C**: modo `social` direto da URL, sem sessão prévia.
+
+Flags relevantes: `--max-clips/-n`, `--skip-review`, `--upload`, `--platforms`, `--thumbnail-text`, `--history/-H`.
+
+### `youcut auth login|revoke|status`
+Gerencia tokens OAuth de YouTube / Instagram / TikTok, salvos em `~/.youcut/credentials/<plataforma>.json`.
+
+---
+
+## 3. Pipeline (Como Funciona)
+
+### 3.1 Pipeline canônico (modo `social`)
+1. **Download** (`downloader.py`) — `yt-dlp` para URLs, ou resolve um arquivo local. Suporta cookies de browser/arquivo via `YOUCUT_COOKIES_FROM_BROWSER` / `YOUCUT_COOKIES_FILE` (módulo `yt_dlp_auth.py`).
+2. **Transcrição** (`transcriber.py`) — `faster-whisper` (default) com fallback para `openai-whisper`. Faz cache por hash MD5 do vídeo em `<video>_transcript.json` ao lado do arquivo. Retorna `TranscriptionResult` (segments + word-level timestamps).
+3. **Análise IA** (`analyzer.py`) — Envia a transcrição em chunks de 30 min para o Claude (`claude-sonnet-4-6` por padrão) com prompts parametrizados pelo `cut_mode`. Retorna lista de `ViralClip` com:
+   - `title`, `reason`, `viral_score` (0–10), `start_time`, `end_time`
+   - `description`, `hashtags`, `thumbnail_idea`, `thumbnail_text`
+   - `social_hook_title`, `social_image_prompt`, `social_visual_style`
+4. **Corte** (`clipper.py`) — `ffmpeg`:
+   - modo `youtube`: stream copy puro (sem re-encode) usando `-c copy`.
+   - modo `social`: re-encode com filtro `scale+crop` para 1080×1920, ou modo "blur background" alternativo.
+   - quando `social_layout_mode == "classic"`, queima legendas via `CaptionBurner` no fim do corte.
+5. **Face tracking opcional** (`face_tracker.py`) — usa MediaPipe + opcionalmente diarização (`diarizer.py` com pyannote) para detectar speaker ativo e gerar crops 9:16 com padding vertical de 40%, suportando split-screen quando há dois speakers.
+6. **Legendas** (`captioner.py` + `caption_burner.py`) — gera arquivo `.ass` (Advanced SubStation) com timestamps por palavra (`word`) ou por segmento (`phrase`) e queima via `ffmpeg -vf ass=...`. Requer `libass`.
+7. **Composição social editorial** (`social_composer.py`) — quando `social_layout_mode == "speaker_bottom_ai_top"`, monta um canvas 1080×1920 com imagem gerada por IA no topo, label/hook no meio e o vídeo original (com face tracking) embaixo. Cores e textos da label são gerados pelo Claude (paleta padrão amarelo/laranja).
+8. **Title overlay** (`title_overlay.py`) — opcional; queima um card com o título nos primeiros 5s do clipe.
+9. **Thumbnail** (`thumbnail_generator.py`) — pipeline de seleção de frame (heurística de brilho/contraste/clareza) e geração via DALL·E 3 com fallback local em Pillow. Texto na thumb limitado a ≤7% da área (heurística do `prompt.md`); paleta favorece ciano/verde/amarelo/laranja, evita vermelho dominante.
+10. **Exporter** (`exporter.py`) — escreve `clip_NN.txt` com título / descrição / hashtags / ideia de thumb / nota de viralidade / motivo da seleção.
+11. **Reviewer** (`reviewer.py`) — TUI interativa via `questionary` para aprovar / rejeitar / editar título / regenerar thumbnail, antes do upload. Pulável com `--skip-review`.
+12. **Upload** (`uploader/`) — opcional; ver §5.
+13. **Sessão** (`session_store.py`) — toda execução do `cuts` modo `youtube` persiste `SessionData` em `~/.youcut/sessions/<id>.json`, permitindo o Fluxo B.
+
+### 3.2 Atalhos do modo `youtube`
+- Análise pede 15–25 min com fallback de 5 min se não houver trechos longos suficientes.
+- Títulos: 5–9 palavras, idealmente ≤30 caracteres.
+- Sem face tracking nem composição social — é stream copy direto.
+
+---
+
+## 4. Estrutura do Pacote `youcut/`
+
+```
+youcut/
+  __init__.py             versão 0.1.0
+  cli.py                  ponto de entrada Typer (run, cuts, auth)
+  config.py               PipelineConfig (pydantic-settings, lê .env)
+  models.py               Pydantic: ViralClip, ClipRecord, SessionData,
+                          TranscriptionResult, CaptionBurnResult, etc.
+
+  downloader.py           yt-dlp wrapper + VideoDownloadError
+  yt_dlp_auth.py          resolve cookies / runtimes JS para yt-dlp
+  url_utils.py            normaliza URLs do YouTube
+  video_metadata.py       extrai title/duration sem baixar o vídeo
+
+  transcriber.py          faster-whisper / openai-whisper + cache MD5
+  analyzer.py             Claude API; prompts por cut_mode
+  diarizer.py             pyannote.audio (opcional, extra `face-tracking`)
+  face_tracker.py         MediaPipe; ROIs 9:16 com padding e split-screen
+  clipper.py              ffmpeg; modos youtube (stream-copy) e social
+  caption_burner.py       wrapper alto-nível p/ queimar legenda no clipe
+  captioner.py            geração de .ass (palavra-a-palavra ou por frase)
+  title_overlay.py        card com título nos primeiros 5s
+  social_composer.py      layout editorial 1080x1920 (img IA + tarja + vídeo)
+  thumbnail_generator.py  seleção de frame + DALL·E 3 + composição Pillow
+  preview.py              gera GIF/preview curto p/ tabela do CLI
+  selector.py             seleção interativa de clipes (Fluxo B)
+  reviewer.py             TUI de aprovação por clipe
+  exporter.py             escreve clip_NN.txt
+  session_store.py        persistência em ~/.youcut/sessions/
+
+  uploader/
+    __init__.py           orquestra upload_clips() multi-plataforma
+    base.py               Uploader (ABC) + ClipMetadata + UploadResult
+    auth.py               leitura/gravação de tokens em ~/.youcut/credentials
+    metadata.py           parse de clip_NN.txt + limites por plataforma
+    youtube.py            Google API (resumable upload + thumbnail.set)
+    instagram.py          Graph API (container -> publish)
+    tiktok.py             OAuth PKCE + Content Posting API (draft|direct)
+    report.py             relatório final consolidado
+
+  assets/
+    Roboto-Regular.ttf    fonte default p/ legendas / overlays / labels
+```
+
+### Diretórios extras
+- `tests/` — pytest, com marker `integration` para testes que geram vídeos sintéticos via FFmpeg. ~40+ arquivos de teste (`test_pipeline*.py`, `test_uploader_*.py`, `test_face_tracker*.py`, etc.).
+- `tasks/` — PRDs versionados de cada feature já entregue (cada subpasta = um épico).
+- `templates/` — templates de PRD / Tech Spec / Tasks usados pelas skills do `.agents/skills/`.
+- `.agents/skills/` — skills locais (`criar-prd`, `criar-techspec.md`, `executar-task`, `task-review`, `executar-qa`, `executar-bugfix`, `thumbnail-generator`, etc.) que estruturam o ciclo de desenvolvimento.
+- `docs/` — site estático + termos / privacy policy publicados (necessários para review do TikTok).
+- `output/` — destino padrão dos clipes (configurável via `OUTPUT_DIR`).
+- `~/.youcut/credentials/` e `~/.youcut/sessions/` — estado persistente do usuário.
+
+---
+
+## 5. Upload (`youcut/uploader/`)
+
+Cada plataforma implementa a interface `Uploader` (`base.py`):
+
+| Plataforma | Auth                                 | Endpoint principal                          | Observações |
+|------------|--------------------------------------|---------------------------------------------|-------------|
+| YouTube    | OAuth client_secrets (`googleapiclient`) | `videos.insert` (resumable) + `thumbnails.set` | Thumbnail validada localmente: existe, ext em `{png,jpg,jpeg}`, ≤2 MB. Falha de thumb não derruba o vídeo (publicação parcial com aviso). |
+| Instagram  | Graph API token                      | container → publish                         | Reels/Stories. |
+| TikTok     | OAuth PKCE                           | Content Posting API                         | `TIKTOK_POST_MODE=draft` (default, vai pra inbox) ou `direct` (publica via API). Modo `direct` exige escopo `video.publish` e usa `TIKTOK_PRIVACY_LEVEL` (default `SELF_ONLY`). |
+
+`upload_clips()` em `uploader/__init__.py` é o orquestrador:
+1. resolve seleção de clipes (`--clips 1,3` ou `all`);
+2. autentica todas as plataformas (falhas individuais não derrubam o batch);
+3. faz upload sequencial por clipe × plataforma;
+4. gera relatório (`UploadReport`) salvo via `report.py` no diretório do clipe.
+
+---
+
+## 6. Configuração (`PipelineConfig`)
+
+`pydantic-settings` lê `.env` na raiz e variáveis de ambiente. Campos relevantes:
+
+| Campo                              | Default                  | Notas |
+|------------------------------------|--------------------------|-------|
+| `anthropic_api_key`                | **obrigatório**          | valida no `model_validator`; falha cedo se ausente |
+| `whisper_model`                    | `medium`                 | qualquer modelo aceito pelos backends Whisper |
+| `claude_model`                     | `claude-sonnet-4-6`      | usado pelo analyzer e pelo social_composer |
+| `clip_count`                       | `5`                      | usado pelo `run` legado |
+| `subtitle_style`                   | `word`                   | `word` ou `phrase` |
+| `output_dir`                       | `output`                 | |
+| `cut_mode`                         | `social`                 | `social` ou `youtube` |
+| `max_clips`                        | `None`                   | usado pelo `cuts`; `None` deixa a IA decidir |
+| `dry_run`                          | `False`                  | só análise, sem render |
+| `title_overlay`                    | `False`                  | card de título nos 5s iniciais |
+| `upload`, `platforms`, `clips`     | —                        | controle de publicação |
+| `vertical_fill_mode`               | `fill_crop`              | alternativa: `blur_background` |
+| `face_tracking`                    | `False`                  | habilita pipeline MediaPipe + diarização |
+| `huggingface_token`                | `None`                   | necessário p/ `pyannote.audio` no diarizer |
+| `face_detection_confidence`        | `0.5`                    | |
+| `social_layout_mode`               | `classic`                | `classic` ou `speaker_bottom_ai_top` |
+| `social_layout_*`                  | vários                   | controla altura da imagem topo, banda do título, paleta |
+| `openai_api_key`                   | `None`                   | obrigatório para gerar thumbnail/imagem social via DALL·E 3 |
+| `session_timeout_minutes`          | `7`                      | timeout de inatividade no card de oferta do Fluxo B |
+
+### Variáveis de ambiente extras (não em `PipelineConfig`)
+- `YOUTUBE_CLIENT_SECRETS_FILE` — caminho do `client_secrets.json`
+- `YOUCUT_COOKIES_FROM_BROWSER` ou `YOUCUT_COOKIES_FILE` — auth do `yt-dlp` (use só uma)
+- `YOUCUT_YTDLP_JS_RUNTIMES` — ex: `node`, p/ resolver desafios JS do YouTube
+- `TIKTOK_CLIENT_KEY`, `TIKTOK_CLIENT_SECRET`, `TIKTOK_POST_MODE`, `TIKTOK_PRIVACY_LEVEL`, `TIKTOK_DISABLE_COMMENT|DUET|STITCH`
+- `INSTAGRAM_*` — credenciais Graph API
+
+---
+
+## 7. Modelos de Dados-Chave (`youcut/models.py`)
+
+- **`ViralClip`** — saída do `analyzer`. Inclui campos editoriais (`title`, `description`, `hashtags`, `thumbnail_idea`, `thumbnail_text`) e campos sociais (`social_hook_title`, `social_image_prompt`, `social_visual_style`).
+- **`ClipRecord`** — estado persistido do clipe gerado: paths, status de aprovação, `upload_status` por plataforma, `youtube_video_id/url`, flags de legenda.
+- **`SessionData`** — sessão completa do `cuts` (URL, modo, transcript cache, clips, output dir).
+- **`TranscriptionResult`** / `TranscriptionSegment` / `WordTimestamp` — saída do Whisper, com timestamps palavra a palavra.
+- **`SpeakerSegment`**, **`CropRegion`**, **`FaceTrackingResult`** — do face tracker.
+- **`ThumbnailFrameResult`** — resultado da seleção/geração de thumb (`selection_method` e `generation_method` ∈ {`ai`, `local`}).
+- **`CaptionBurnResult`** — wrapper Path-like com `captions_applied` + `warning`.
+
+---
+
+## 8. Heurísticas de Thumbnail (Resumo do `prompt.md`)
+
+O pipeline de thumb segue essas regras (estão codificadas em `thumbnail_generator.py`):
+- texto embutido **opcional**, no máximo ~7% da área da imagem;
+- paleta preferida: **ciano, verde, amarelo, laranja**; evita vermelho dominante;
+- a imagem deve "contar a história sozinha" — não repetir o título literal;
+- preferir frames mais brilhantes, expressivos, com rosto/recorte forte quando disponíveis;
+- múltiplos rostos em cena reforçam tensão / reação / conversa.
+
+A skill local `.agents/skills/thumbnail-generator/SKILL.md` (e `prd.md`) é referenciada pelo código em runtime para gerar thumbnails consistentes.
+
+---
+
+## 9. Saída no Disco
+
+```
+output/
+├─ downloads/
+│   ├─ <video>.mp4
+│   └─ <video>_transcript.json     # cache MD5 da transcrição
+└─ <video>/
+    ├─ clip_01.mp4
+    ├─ clip_01.txt                 # título, descrição, hashtags, motivo, score
+    ├─ thumbnails/clip_01.png      # quando aplicável (modo youtube)
+    ├─ social_images/clip_01.png   # imagem topo do layout social_composer
+    └─ ...
+
+~/.youcut/
+├─ credentials/{youtube,instagram,tiktok}.json
+└─ sessions/<session_id>.json
+```
+
+---
+
+## 10. Testes
+
+- `pytest` (configurado em `pyproject.toml`, `testpaths = ["tests"]`)
+- Marker `integration` para testes que invocam FFmpeg de verdade — pulam em CI sem binário compatível.
+- Cobertura inclui: pipelines completos (`test_pipeline*.py`), uploaders (`test_uploader_*.py`), face tracking (`test_face_tracker*.py`), composers e geração de thumb. Total: ~45 arquivos de teste.
+
+Comando: `pytest` (instale com `pip install -e .[dev]`).
+
+---
+
+## 11. Dependências (de `pyproject.toml`)
+
+**Core:**
+`typer`, `rich`, `pydantic>=2`, `pydantic-settings`, `anthropic>=0.40`, `faster-whisper`, `yt-dlp`, `Pillow`, `google-api-python-client`, `google-auth-oauthlib`, `httpx`, `questionary`, `openai`.
+
+**Extras:**
+- `whisper-openai`: `openai-whisper` como fallback de transcrição.
+- `face-tracking`: `mediapipe>=0.10`, `pyannote.audio>=3.1`, `opencv-python>=4.8`.
+- `dev`: `pytest`, `pytest-env`, `respx`.
+
+**Externo (não-Python):**
+- `ffmpeg 8.1+` com `--enable-libass` (no Homebrew, pelo tap `homebrew-ffmpeg/ffmpeg`).
+- Opcional: `node` no PATH para `YOUCUT_YTDLP_JS_RUNTIMES=node`.
+
+---
+
+## 12. Convenções para LLMs Operando neste Repositório
+
+- **Antes de modificar qualquer módulo, consulte [`ARQUITETURA_GUIDE_LINES.md`](./ARQUITETURA_GUIDE_LINES.md)** — ele lista, arquivo a arquivo, o papel de cada módulo, suas APIs públicas e onde se encaixam no pipeline. É a fonte canônica para navegar o código sem precisar abrir cada arquivo.
+- O idioma padrão é **português (pt-BR)** — mensagens de erro, prompts de IA, docs e commits seguem esse padrão.
+- Prompts do Claude estão centralizados em `analyzer.py` (cortes) e `social_composer.py` (label editorial). Mudanças em prompts devem preservar a contratualização do JSON de saída.
+- Toda nova feature começa por um PRD em `tasks/prd-<slug>/` (templates em `templates/`). As skills `.agents/skills/criar-prd`, `criar-techspec.md`, `criar-task`, `executar-task` formalizam esse fluxo.
+- Não comitar `.env`, `cookies.txt`, tokens em `~/.youcut/credentials/`, nem `youtube-oauth.json`.
+- O `ANTHROPIC_API_KEY` é validado no boot — qualquer entrypoint que instancie `PipelineConfig` precisa dele.
+- `ffmpeg` é dependência crítica em runtime — `cli._check_ffmpeg()` falha cedo se não estiver no PATH.
+- Cache de transcrição é endereçado por **MD5 do arquivo de vídeo**: renomear o arquivo invalida o cache; alterar bytes invalida.

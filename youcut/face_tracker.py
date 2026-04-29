@@ -187,6 +187,114 @@ def _make_face_detector(min_confidence: float):
     )
 
 
+def _detect_faces_with_mediapipe(frame, min_confidence: float) -> list[_BBox]:
+    """Try MediaPipe face detection. Returns [] when the legacy ``solutions``
+    API is unavailable (e.g. mediapipe>=0.10 on Python 3.13)."""
+    try:
+        import mediapipe as mp  # type: ignore[import]
+        if not hasattr(mp, "solutions"):
+            return []
+        with mp.solutions.face_detection.FaceDetection(
+            min_detection_confidence=min_confidence,
+        ) as detector:
+            return _detect_faces_in_frame(frame, detector)
+    except Exception:
+        return []
+
+
+def _detect_faces_with_opencv(frame) -> list[_BBox]:
+    """Fallback face detection using OpenCV's bundled Haar cascade."""
+    try:
+        import cv2  # type: ignore[import]
+        cascade_path = Path(cv2.data.haarcascades) / "haarcascade_frontalface_default.xml"
+        cascade = cv2.CascadeClassifier(str(cascade_path))
+        if cascade.empty():
+            return []
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        rects = cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=3, minSize=(40, 40))
+        return [_BBox(x=int(x), y=int(y), w=int(w), h=int(h)) for (x, y, w, h) in rects]
+    except Exception:
+        return []
+
+
+def detect_dominant_face_y_norm(
+    clip_path: Path,
+    *,
+    sample_count: int = 8,
+    min_confidence: float = 0.5,
+) -> float | None:
+    """Sample frames from *clip_path* and return the average normalized vertical
+    center (0..1) of the dominant face across detections.
+
+    "Dominant" = the largest-area face per frame, which on talking-head sources
+    is reliably the speaker. Returns ``None`` when neither MediaPipe nor OpenCV
+    can be used, the video can't be opened, or no face is detected in any sample.
+
+    Used by the social composer to anchor the bottom-panel crop on the speaker's
+    face instead of doing a naive centre crop.
+    """
+    try:
+        import cv2  # type: ignore[import]
+    except ImportError as exc:
+        logger.info("Face anchor: OpenCV ausente (%s)", exc)
+        return None
+
+    cap = cv2.VideoCapture(str(clip_path))
+    if not cap.isOpened():
+        logger.info("Face anchor: não foi possível abrir %s", clip_path)
+        return None
+
+    total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    if total <= 0:
+        cap.release()
+        return None
+
+    sample_count = max(1, sample_count)
+    positions = [int(total * (i + 0.5) / sample_count) for i in range(sample_count)]
+
+    samples: list[tuple[float, int]] = []  # (y_norm, area)
+    for pos in positions:
+        cap.set(cv2.CAP_PROP_POS_FRAMES, pos)
+        ok, frame = cap.read()
+        if not ok:
+            continue
+        faces = _detect_faces_with_mediapipe(frame, min_confidence)
+        if not faces:
+            faces = _detect_faces_with_opencv(frame)
+        if not faces:
+            continue
+        h_frame = frame.shape[0]
+        if h_frame <= 0:
+            continue
+        dominant = max(faces, key=lambda b: b.w * b.h)
+        y_center_norm = (dominant.y + dominant.h / 2.0) / h_frame
+        samples.append((max(0.0, min(1.0, y_center_norm)), dominant.w * dominant.h))
+
+    cap.release()
+
+    if not samples:
+        logger.info("Face anchor: nenhum rosto detectado em %s", clip_path.name)
+        return None
+
+    # Drop detections with area below 50% of the largest sample to filter out
+    # Haar false positives on buttons / chair fabric while keeping real faces.
+    max_area = max(area for _, area in samples)
+    filtered = [y for y, area in samples if area >= max_area * 0.5]
+    if not filtered:
+        filtered = [y for y, _ in samples]
+
+    # Use the median: robust to remaining outliers, no averaging artifacts.
+    filtered.sort()
+    mid = len(filtered) // 2
+    median = filtered[mid] if len(filtered) % 2 else (filtered[mid - 1] + filtered[mid]) / 2.0
+
+    logger.info(
+        "Face anchor: rosto dominante em y_norm=%.3f (n=%d/%d) para %s",
+        median, len(filtered), len(samples), clip_path.name,
+    )
+    return median
+
+
 # ---------------------------------------------------------------------------
 # Public entry point (stub — rendering added in Task 4.0)
 # ---------------------------------------------------------------------------

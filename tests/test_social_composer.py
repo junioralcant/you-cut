@@ -7,6 +7,7 @@ from PIL import Image
 
 from youcut.models import ViralClip
 from youcut.social_composer import (
+    _build_bottom_crop_filter,
     _render_title_band_image,
     compose_social_clip,
     resolve_title_band_colors,
@@ -65,14 +66,65 @@ def test_compose_social_clip_builds_social_output(monkeypatch, tmp_path):
 
     with (
         patch("youcut.social_composer._render_social_header_image", return_value=top_image),
+        patch("youcut.social_composer._probe_video_dimensions", return_value=(1080, 1920)),
+        patch("youcut.social_composer._detect_face_y_norm", return_value=0.30),
         patch("youcut.social_composer.subprocess.run", return_value=subprocess.CompletedProcess(args=["ffmpeg"], returncode=0)) as mock_run,
     ):
         output_path = compose_social_clip(clip_path, clip, config)
 
     cmd = mock_run.call_args[0][0]
+    filter_complex = cmd[cmd.index("-filter_complex") + 1]
     assert output_path.name == "clip_social.mp4"
     assert "-filter_complex" in cmd
-    assert "overlay=0:1040" in cmd[cmd.index("-filter_complex") + 1]
+    assert "overlay=0:1040" in filter_complex
+    # Bottom crop must use a face-aware Y offset (not the default centre crop).
+    assert "crop=1080:880:0:" in filter_complex
+
+
+def test_build_bottom_crop_filter_anchors_on_face_when_known():
+    # Source 1080x1920 portrait → bottom panel 1080x880.
+    # Face center at y_norm=0.30 → y_scaled=576. Target ratio 0.55 → desired
+    # offset = 576 - 880*0.55 = 92, clamped to [0, 1040].
+    result = _build_bottom_crop_filter(
+        src_w=1080, src_h=1920, target_w=1080, target_h=880, face_y_norm=0.30,
+    )
+    assert result == "scale=1080:1920,crop=1080:880:0:92"
+
+
+def test_build_bottom_crop_filter_falls_back_to_center_when_no_face():
+    # No face detected → centre crop: offset = (1920-880)/2 = 520.
+    result = _build_bottom_crop_filter(
+        src_w=1080, src_h=1920, target_w=1080, target_h=880, face_y_norm=None,
+    )
+    assert result == "scale=1080:1920,crop=1080:880:0:520"
+
+
+def test_build_bottom_crop_filter_clamps_offset_to_frame():
+    # Face very near the bottom (y_norm=0.95 → y_scaled=1824) would push the
+    # crop past the source height; must clamp to scaled_h - target_h = 1040.
+    result = _build_bottom_crop_filter(
+        src_w=1080, src_h=1920, target_w=1080, target_h=880, face_y_norm=0.95,
+    )
+    assert result == "scale=1080:1920,crop=1080:880:0:1040"
+
+
+def test_build_bottom_crop_filter_face_near_top_clamps_to_zero():
+    # Face right at the top (y_norm=0.05 → y_scaled=96) would want a negative
+    # offset; must clamp to 0.
+    result = _build_bottom_crop_filter(
+        src_w=1080, src_h=1920, target_w=1080, target_h=880, face_y_norm=0.05,
+    )
+    assert result == "scale=1080:1920,crop=1080:880:0:0"
+
+
+def test_build_bottom_crop_filter_landscape_source_uses_x_axis():
+    # Source 1920x1080 (landscape) into bottom panel 1080x880: scale-to-cover
+    # locks height (target_h), crops horizontally; y stays 0.
+    result = _build_bottom_crop_filter(
+        src_w=1920, src_h=1080, target_w=1080, target_h=880, face_y_norm=0.30,
+    )
+    # scaled_w = round(880 * 1920/1080) = 1564, x_offset = (1564-1080)/2 = 242
+    assert result == "scale=1564:880,crop=1080:880:242:0"
 
 
 def test_render_title_band_image_prefers_ai_output(monkeypatch, tmp_path):

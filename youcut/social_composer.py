@@ -28,6 +28,12 @@ _DEFAULT_TEXT = "#111111"
 _ORANGE_BG = "#FF8A00"
 _MAX_LABEL_LINES = 2
 
+# Where the speaker's face center should land vertically inside the bottom panel,
+# expressed as a fraction of the panel height. The detector reports the face
+# bounding box (chin → forehead) without hair, so we aim slightly below the
+# panel midline to keep hair / top of the head inside the frame.
+_BOTTOM_PANEL_FACE_TARGET = 0.55
+
 
 def generate_social_label(
     clip: ViralClip,
@@ -115,11 +121,21 @@ def compose_social_clip(
     if bottom_h <= 0:
         raise ValueError("Alturas do layout social inválidas; bottom panel ficou sem espaço")
 
+    src_w, src_h = _probe_video_dimensions(clip_path)
+    face_y_norm = _detect_face_y_norm(clip_path)
+    bottom_crop = _build_bottom_crop_filter(
+        src_w=src_w,
+        src_h=src_h,
+        target_w=_CANVAS_W,
+        target_h=bottom_h,
+        face_y_norm=face_y_norm,
+    )
+
     overlay_steps = ["[base][header]overlay=0:0[tmp1]", f"[tmp1][bottom]overlay=0:{header_h}[v]"]
 
     filter_parts = [
         f"[0:v]scale={_CANVAS_W}:{header_h}:force_original_aspect_ratio=increase,crop={_CANVAS_W}:{header_h}[header]",
-        f"[1:v]scale={_CANVAS_W}:{bottom_h}:force_original_aspect_ratio=increase,crop={_CANVAS_W}:{bottom_h}[bottom]",
+        f"[1:v]{bottom_crop}[bottom]",
         f"color=c=black:size={_CANVAS_W}x{_CANVAS_H}[base]",
     ]
     filter_parts.extend(overlay_steps)
@@ -626,3 +642,85 @@ def _hex_to_rgb(value: str, *, fallback: str) -> tuple[int, int, int]:
     if len(normalized) != 6:
         normalized = fallback.lstrip("#")
     return tuple(int(normalized[index:index + 2], 16) for index in (0, 2, 4))
+
+
+def _probe_video_dimensions(clip_path: Path) -> tuple[int, int]:
+    """Return (width, height) of *clip_path*. Falls back to canvas size on failure."""
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe", "-v", "error",
+                "-select_streams", "v:0",
+                "-show_entries", "stream=width,height",
+                "-of", "csv=s=x:p=0",
+                str(clip_path),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        w_str, h_str = result.stdout.strip().split("x")
+        return int(w_str), int(h_str)
+    except (subprocess.CalledProcessError, ValueError, FileNotFoundError) as exc:
+        logger.warning("Social composer: falha ao probar dimensões de %s (%s); assumindo %dx%d",
+                       clip_path.name, exc, _CANVAS_W, _CANVAS_H)
+        return _CANVAS_W, _CANVAS_H
+
+
+def _detect_face_y_norm(clip_path: Path) -> float | None:
+    """Wrap face_tracker.detect_dominant_face_y_norm so a missing/raising
+    implementation never blocks the social composer."""
+    try:
+        from youcut.face_tracker import detect_dominant_face_y_norm
+        return detect_dominant_face_y_norm(clip_path)
+    except Exception as exc:
+        logger.warning("Social composer: face anchor falhou (%s); usando enquadramento central", exc)
+        return None
+
+
+def _build_bottom_crop_filter(
+    *,
+    src_w: int,
+    src_h: int,
+    target_w: int,
+    target_h: int,
+    face_y_norm: float | None,
+) -> str:
+    """Build the ``scale,crop`` filter chain that places the bottom-panel slice
+    around the speaker's face when *face_y_norm* is known.
+
+    Mirrors what ``force_original_aspect_ratio=increase`` would do (scale-to-cover),
+    then offsets the crop so the face ends up at ``_BOTTOM_PANEL_FACE_TARGET`` of
+    the panel height — clamped so the crop never leaves the scaled frame.
+    """
+    if src_w <= 0 or src_h <= 0:
+        return f"scale={target_w}:{target_h}:force_original_aspect_ratio=increase,crop={target_w}:{target_h}"
+
+    src_ratio = src_w / src_h
+    target_ratio = target_w / target_h
+
+    if src_ratio >= target_ratio:
+        scaled_h = target_h
+        scaled_w = int(round(target_h * src_ratio))
+        if face_y_norm is None:
+            x_offset = max(0, (scaled_w - target_w) // 2)
+        else:
+            x_offset = max(0, (scaled_w - target_w) // 2)
+        return (
+            f"scale={scaled_w}:{scaled_h},"
+            f"crop={target_w}:{target_h}:{x_offset}:0"
+        )
+
+    scaled_w = target_w
+    scaled_h = int(round(target_w / src_ratio))
+    max_offset = max(0, scaled_h - target_h)
+    if face_y_norm is None:
+        y_offset = max_offset // 2
+    else:
+        face_y_scaled = face_y_norm * scaled_h
+        desired = face_y_scaled - target_h * _BOTTOM_PANEL_FACE_TARGET
+        y_offset = int(round(max(0.0, min(float(max_offset), desired))))
+    return (
+        f"scale={scaled_w}:{scaled_h},"
+        f"crop={target_w}:{target_h}:0:{y_offset}"
+    )
