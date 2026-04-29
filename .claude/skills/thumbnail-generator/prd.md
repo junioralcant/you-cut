@@ -38,7 +38,8 @@ A thumbnail final deve ser gerada a partir do frame-base selecionado, preservand
 - **Por padrão, nenhum texto deve ser embutido na imagem.**
 - Quando texto for explicitamente solicitado, ele deve ocupar no máximo **7% da área total da imagem**.
 - Se o texto ultrapassar 7%, reduza o tamanho da fonte ou truncate com reticências.
+- Com base nas referências de performance adotadas no projeto, prefira **amarelo** e **laranja** como cores principais de texto; evite tratamentos dominados por vermelho.
 - Estilo do texto quando presente:
-  - Texto secundário: branco, fonte bold, stroke preto.
-  - Texto principal (hero): dourado (`#FFD700`), fonte bold, stroke preto, tamanho maior.
+  - Texto secundário: amarelo vivo (`#FFD54A`), fonte bold, stroke preto.
+  - Texto principal (hero): laranja forte (`#FF8A00`), fonte bold, stroke preto, tamanho maior.
   - Centralizado horizontalmente, posicionado na região central vertical da imagem.
