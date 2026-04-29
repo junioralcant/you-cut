@@ -3,9 +3,11 @@ import io
 import json
 import logging
 import os
+import re
 import subprocess
 import sys
 import tempfile
+from collections import Counter
 from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -99,19 +101,33 @@ def _build_thumbnail_result(
     frames = _extract_frames_candidates(source)
     anthropic_client, openai_client = _build_ai_clients(config)
     openai_api_key = _resolve_openai_api_key(config, openai_client)
+    clip_context = _build_thumbnail_clip_context(clip)
+    transcript_visual_context = _build_transcript_visual_context(source, clip.title, anthropic_client)
 
     if anthropic_client is not None:
         frame_timestamp, frame_bytes, selection_method, frame_score = _select_best_frame_via_ai_result(
             frames,
             clip.title,
             anthropic_client,
+            clip_context=clip_context,
+            transcript_visual_context=transcript_visual_context,
         )
     else:
         frame_timestamp, frame_bytes, frame_score = _select_best_local_candidate(frames)
         selection_method = "local"
         logger.warning("Seleção por IA indisponível; usando método local")
 
-    reference_frames = _select_generation_reference_frames(frames, frame_timestamp)
+    if anthropic_client is not None:
+        reference_frames = _select_supporting_reference_frames_via_ai_result(
+            frames,
+            clip.title,
+            frame_timestamp,
+            anthropic_client,
+            clip_context=clip_context,
+            transcript_visual_context=transcript_visual_context,
+        )
+    else:
+        reference_frames = _select_generation_reference_frames(frames, frame_timestamp)
     if openai_client is not None:
         thumbnail_bytes, generation_method = _generate_thumbnail_via_ai_result(
             frame_bytes,
@@ -119,6 +135,9 @@ def _build_thumbnail_result(
             openai_client,
             reference_frames=reference_frames,
             openai_api_key=openai_api_key,
+            thumbnail_text=clip.thumbnail_text,
+            clip_context=clip_context,
+            transcript_visual_context=transcript_visual_context,
         )
     else:
         thumbnail_bytes, generation_method = _generate_thumbnail_via_ai_result(
@@ -127,10 +146,13 @@ def _build_thumbnail_result(
             None,
             reference_frames=reference_frames,
             openai_api_key=openai_api_key,
+            thumbnail_text=clip.thumbnail_text,
+            clip_context=clip_context,
+            transcript_visual_context=transcript_visual_context,
         )
 
     image = _load_image_from_bytes(thumbnail_bytes)
-    composed = _compose_text_overlay(image, clip.thumbnail_text)
+    composed = image if generation_method == "ai" else _compose_text_overlay(image, clip.thumbnail_text)
     composed.save(output_path, format="PNG", optimize=True)
     _resize_to_youtube_format(output_path)
 
@@ -396,6 +418,8 @@ def _select_best_frame_via_ai_result(
     title: str,
     anthropic_client: Any,
     timeout: float = 30.0,
+    clip_context: str = "",
+    transcript_visual_context: str = "",
 ) -> tuple[float, bytes, str, float]:
     if anthropic_client is None:
         timestamp, frame_bytes, frame_score = _select_best_local_candidate(frames)
@@ -408,7 +432,9 @@ def _select_best_frame_via_ai_result(
         "expressividade facial e composição narrativa. Penalize frame escuro, vermelho dominante, ruído visual "
         "e composição confusa. Responda somente JSON válido no formato "
         '{"selected_index": <int>, "reason": "<string>"}'
-        f'. Título do clipe: "{title}".'
+        f'. Título do clipe: "{title}". '
+        f'Contexto do clipe: "{clip_context}". '
+        f'Pistas temáticas da transcrição: "{transcript_visual_context}".'
     )
     content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
     for index, (_, frame_bytes) in enumerate(frames):
@@ -449,13 +475,100 @@ def _select_best_frame_via_ai_result(
         return timestamp, frame_bytes, "local", frame_score
 
 
+def _select_supporting_reference_frames_via_ai_result(
+    frames: list[tuple[float, bytes]],
+    title: str,
+    selected_timestamp: float,
+    anthropic_client: Any,
+    timeout: float = 30.0,
+    max_frames: int = 5,
+    clip_context: str = "",
+    transcript_visual_context: str = "",
+) -> list[bytes]:
+    if anthropic_client is None or not frames:
+        return _select_generation_reference_frames(frames, selected_timestamp, max_frames=max_frames)
+
+    selected_index = min(range(len(frames)), key=lambda index: abs(frames[index][0] - selected_timestamp))
+    prompt = (
+        "Escolha frames de apoio para enriquecer uma thumbnail de YouTube a partir do mesmo clipe. "
+        "Priorize frames que adicionem: pessoas extras da mesma cena, rostos complementares, reações, "
+        "microfones, mesa, telões, objetos e elementos visuais relevantes ao tema discutido. "
+        "Se houver mais de uma pessoa útil entre os frames, inclua todas nas referências. "
+        "Mantenha coerência factual com a cena real e evite redundância. "
+        "Responda somente JSON válido no formato "
+        '{"supporting_indices": [<int>, ...], "reason": "<string>"} '
+        f'com no máximo {max(0, max_frames - 1)} índices adicionais, sem repetir o frame principal {selected_index}. '
+        f'Título do clipe: "{title}". Contexto do clipe: "{clip_context}". '
+        f'Pistas temáticas da transcrição: "{transcript_visual_context}".'
+    )
+    content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
+    for index, (_, frame_bytes) in enumerate(frames):
+        label = f"Frame {index}"
+        if index == selected_index:
+            label += " (principal)"
+        content.append({"type": "text", "text": label})
+        content.append(
+            {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": "image/png",
+                    "data": base64.b64encode(frame_bytes).decode("utf-8"),
+                },
+            }
+        )
+
+    try:
+        client = _client_with_timeout(anthropic_client, timeout)
+        response = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=256,
+            messages=[{"role": "user", "content": content}],
+        )
+        payload = _extract_json_payload(_anthropic_response_text(response))
+        raw_indices = payload.get("supporting_indices", [])
+        if not isinstance(raw_indices, list):
+            raise ValueError("supporting_indices inválido")
+        indices = [selected_index]
+        for item in raw_indices:
+            index = int(item)
+            if 0 <= index < len(frames) and index != selected_index and index not in indices:
+                indices.append(index)
+            if len(indices) >= min(max_frames, len(frames)):
+                break
+        reason = str(payload.get("reason", "")).strip()
+        if len(indices) == 1:
+            return _select_generation_reference_frames(frames, selected_timestamp, max_frames=max_frames)
+        logger.info(
+            "Frames de apoio selecionados por IA: principal=%d adicionais=%s reason=%s",
+            selected_index,
+            indices[1:],
+            reason or "sem motivo informado",
+        )
+        return [frames[index][1] for index in indices]
+    except Exception as exc:
+        logger.warning("Falha ao selecionar frames de apoio por IA; usando frames vizinhos: %s", exc)
+        return _select_generation_reference_frames(frames, selected_timestamp, max_frames=max_frames)
+
+
 def _generate_thumbnail_via_ai(
     frame_bytes: bytes,
     title: str,
     openai_client: Any,
     timeout: float = 60.0,
+    thumbnail_text: str = "",
+    clip_context: str = "",
+    transcript_visual_context: str = "",
 ) -> bytes:
-    thumbnail_bytes, _ = _generate_thumbnail_via_ai_result(frame_bytes, title, openai_client, timeout)
+    thumbnail_bytes, _ = _generate_thumbnail_via_ai_result(
+        frame_bytes,
+        title,
+        openai_client,
+        timeout,
+        thumbnail_text=thumbnail_text,
+        clip_context=clip_context,
+        transcript_visual_context=transcript_visual_context,
+    )
     return thumbnail_bytes
 
 
@@ -466,12 +579,20 @@ def _generate_thumbnail_via_ai_result(
     timeout: float = 60.0,
     reference_frames: list[bytes] | None = None,
     openai_api_key: str | None = None,
+    thumbnail_text: str = "",
+    clip_context: str = "",
+    transcript_visual_context: str = "",
 ) -> tuple[bytes, str]:
     if openai_client is None:
         logger.warning("Cliente OpenAI ausente; usando fallback local para geração de thumbnail")
         return _render_local_thumbnail_bytes(frame_bytes), "local"
 
-    prompt = _build_thumbnail_generation_prompt(title)
+    prompt = _build_thumbnail_generation_prompt(
+        title,
+        thumbnail_text=thumbnail_text,
+        clip_context=clip_context,
+        transcript_visual_context=transcript_visual_context,
+    )
     reference_frame_bytes = reference_frames or [frame_bytes]
 
     try:
@@ -564,7 +685,7 @@ def _compose_text_overlay(image: "Image.Image", title: str) -> "Image.Image":  #
             layout["secondary_font"],
             y=current_y,
             canvas_w=w,
-            fill=(255, 255, 255, 255),
+            fill=(255, 214, 74, 255),
             stroke_width=layout["secondary_stroke"],
         )
         current_y += layout["secondary_line_h"]
@@ -576,7 +697,7 @@ def _compose_text_overlay(image: "Image.Image", title: str) -> "Image.Image":  #
         layout["hero_font"],
         y=current_y,
         canvas_w=w,
-        fill=(255, 215, 0, 255),
+        fill=(255, 138, 0, 255),
         stroke_width=layout["hero_stroke"],
     )
 
@@ -924,23 +1045,183 @@ def _load_thumbnail_prompt_context() -> str:
     return " ".join(context_parts).strip()
 
 
-def _build_thumbnail_generation_prompt(title: str) -> str:
+def _normalize_thumbnail_text(text: str) -> str:
+    return " ".join(text.strip().split())
+
+
+def _build_thumbnail_clip_context(clip: ViralClip) -> str:
+    parts = [
+        clip.thumbnail_idea.strip(),
+        clip.reason.strip(),
+        clip.description.strip(),
+    ]
+    hashtags = " ".join(tag.strip() for tag in clip.hashtags if tag.strip())
+    if hashtags:
+        parts.append(hashtags)
+    return " | ".join(part for part in parts if part)
+
+
+def _transcript_cache_path(video_path: Path) -> Path:
+    return video_path.parent / f"{video_path.stem}_transcript.json"
+
+
+def _load_transcript_excerpt(video_path: Path, max_segments: int = 8, max_chars: int = 1200) -> str:
+    transcript_path = _transcript_cache_path(video_path)
+    if not transcript_path.exists():
+        return ""
+    try:
+        data = json.loads(transcript_path.read_text(encoding="utf-8"))
+        segments = data.get("result", {}).get("segments", [])
+        texts = [str(seg.get("text", "")).strip() for seg in segments[:max_segments]]
+        excerpt = " ".join(text for text in texts if text).strip()
+        return excerpt[:max_chars].strip()
+    except Exception:
+        return ""
+
+
+def _extract_transcript_visual_elements_fallback(transcript_excerpt: str, limit: int = 4) -> list[str]:
+    lowered = transcript_excerpt.lower()
+    motif_map = [
+        (("eleição", "eleicoes", "presidente", "pré-candidato", "campanha", "urna"), "referência sutil a eleição e campanha"),
+        (("segurança pública", "seguranca publica", "crime", "violência", "bala", "defesa"), "referência sutil a segurança pública"),
+        (("economia", "imposto", "investimento", "mercado", "gasto"), "referência sutil a economia e investimentos"),
+        (("stf", "supremo", "judiciário", "judiciario", "tribunal"), "referência sutil a justiça e instituições"),
+        (("digital", "redes sociais", "internet", "mídia", "midia"), "referência sutil a mídia e ambiente digital"),
+        (("juventude", "jovem", "universidade", "estudante"), "referência sutil a público jovem"),
+    ]
+    elements: list[str] = []
+    for keywords, motif in motif_map:
+        if any(keyword in lowered for keyword in keywords):
+            elements.append(motif)
+
+    if len(elements) >= limit:
+        return elements[:limit]
+
+    tokens = re.findall(r"[a-zA-ZÀ-ÿ]{5,}", lowered)
+    stopwords = {
+        "sobre", "porque", "quando", "entre", "muito", "senhor", "senhora", "depois",
+        "também", "tambem", "questão", "questao", "falando", "importante", "coloca",
+        "outras", "outros", "tema", "temas", "pré", "candidato", "campanha",
+    }
+    counts = Counter(token for token in tokens if token not in stopwords)
+    for token, _ in counts.most_common(limit * 2):
+        motif = f"elemento temático discreto ligado a {token}"
+        if motif not in elements:
+            elements.append(motif)
+        if len(elements) >= limit:
+            break
+    return elements[:limit]
+
+
+def _extract_transcript_visual_elements_via_ai_result(
+    transcript_excerpt: str,
+    title: str,
+    anthropic_client: Any,
+    timeout: float = 20.0,
+    limit: int = 4,
+) -> list[str]:
+    if anthropic_client is None or not transcript_excerpt.strip():
+        return _extract_transcript_visual_elements_fallback(transcript_excerpt, limit=limit)
+
+    prompt = (
+        "Leia a transcrição parcial de um clipe e extraia no máximo 4 elementos visuais secundários "
+        "que poderiam aparecer de forma discreta em uma thumbnail, sem tirar o foco principal das pessoas. "
+        "Os elementos devem ser simbólicos, sutis e coerentes com o que foi falado. "
+        "Não invente fatos específicos nem objetos muito literais se a fala não sustentar isso. "
+        "Responda somente JSON válido no formato "
+        '{"elements": ["<string>", "..."]}. '
+        f'Título do clipe: "{title}". Transcrição: "{transcript_excerpt}".'
+    )
+    try:
+        client = _client_with_timeout(anthropic_client, timeout)
+        response = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=200,
+            messages=[{"role": "user", "content": [{"type": "text", "text": prompt}]}],
+        )
+        payload = _extract_json_payload(_anthropic_response_text(response))
+        raw_elements = payload.get("elements", [])
+        if not isinstance(raw_elements, list):
+            raise ValueError("elements inválido")
+        elements = []
+        for item in raw_elements:
+            text = " ".join(str(item).split()).strip()
+            if text and text not in elements:
+                elements.append(text)
+            if len(elements) >= limit:
+                break
+        return elements or _extract_transcript_visual_elements_fallback(transcript_excerpt, limit=limit)
+    except Exception as exc:
+        logger.warning("Falha ao extrair elementos visuais da transcrição por IA; usando fallback local: %s", exc)
+        return _extract_transcript_visual_elements_fallback(transcript_excerpt, limit=limit)
+
+
+def _build_transcript_visual_context(video_path: Path, title: str, anthropic_client: Any) -> str:
+    transcript_excerpt = _load_transcript_excerpt(video_path)
+    if not transcript_excerpt:
+        return ""
+    elements = _extract_transcript_visual_elements_via_ai_result(transcript_excerpt, title, anthropic_client)
+    if not elements:
+        return ""
+    return " | ".join(elements)
+
+
+def _build_thumbnail_text_prompt_rules(thumbnail_text: str) -> str:
+    normalized_text = _normalize_thumbnail_text(thumbnail_text)
+    if not normalized_text:
+        return "Do not add any text, captions, words, logos, labels, or typography inside the image unless explicitly requested elsewhere. "
+
+    secondary_lines, hero = _split_title_hierarchy(normalized_text)
+    secondary_text = " / ".join(secondary_lines) if secondary_lines else ""
+    text_rules = [
+        f'Embed exactly this thumbnail text inside the generated image: "{normalized_text.upper()}".',
+        "Do not paraphrase, translate, expand, shorten, or replace the requested text.",
+        "The text must occupy at most 7% of the total image area.",
+        "If the requested text would exceed 7%, reduce the typography size while preserving readability.",
+        "Use a bold modern sans-serif style with black stroke.",
+        "Place the text centered horizontally and in the central vertical region of the image.",
+        "Keep the entire text inside the middle vertical safe-zone for 16:9 cropping.",
+        "Prefer bright yellow and vivid orange text accents because they read strongly in thumbnails and outperform red-heavy treatments.",
+    ]
+    if secondary_text:
+        text_rules.append(f'Render the secondary text in bright yellow (#FFD54A): "{secondary_text}".')
+    text_rules.append(f'Render the hero text larger in vivid orange (#FF8A00): "{hero}".')
+    return " ".join(text_rules) + " "
+
+
+def _build_thumbnail_generation_prompt(
+    title: str,
+    thumbnail_text: str = "",
+    clip_context: str = "",
+    transcript_visual_context: str = "",
+) -> str:
     doc_context = _load_thumbnail_prompt_context()
     base_prompt = (
         "Create a premium YouTube thumbnail derived from the reference frame. "
+        "Analyze all provided reference frames together before composing the image. "
         "Preserve the exact identity of the main subject from the reference frame. "
         "Do not change the person's face, age, skin tone, hair, body type, or identity. "
-        "Do not replace the person with another character or invent a different subject. "
+        "Do not replace the people with other characters or invent different subjects. "
         "Preserve gaze direction, gesture, clothing cues, and overall scene truthfully. "
-        "Do not add any text, captions, words, logos, labels, or typography inside the image unless explicitly requested elsewhere. "
+        "If the reference frames show more than one relevant person from the same scene or interview, include all of them in the thumbnail when composition allows. "
+        "Use additional reference frames to bring in complementary people, reactions, microphones, desk objects, background set pieces, or topic-relevant visual elements that are actually grounded in the references. "
+        "When the clip context mentions discussed themes or elements, emphasize them only if they can be represented truthfully from the reference material and scene. "
+        "If transcript-derived thematic cues are provided, use them only as subtle secondary motifs in the background or support layers. "
+        "The people and their expressions must remain the main focus of the thumbnail. "
         "Increase contrast, subject separation, facial readability, and narrative tension without inventing false events. "
         "Keep all text and critical subjects in the vertical center safe-zone for 16:9 cropping. "
         "The top 12% of the frame should remain mostly empty background space. "
         "Favor cinematic clarity, bold subject framing, clean background separation, and dramatic but realistic lighting. "
     )
+    base_prompt += _build_thumbnail_text_prompt_rules(thumbnail_text)
     if doc_context:
         base_prompt += f"{doc_context} "
-    return f"{base_prompt}Video title context: {title}."
+    context_suffix = f"Video title context: {title}."
+    if clip_context:
+        context_suffix += f" Clip thematic context: {clip_context}."
+    if transcript_visual_context:
+        context_suffix += f" Transcript-derived subtle visual motifs: {transcript_visual_context}."
+    return f"{base_prompt}{context_suffix}"
 
 
 def _read_text_if_exists(path: Path) -> str:

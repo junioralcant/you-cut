@@ -1,4 +1,5 @@
 import logging
+import re
 
 import anthropic
 
@@ -21,6 +22,7 @@ MAX_CLIP_DURATION = SOCIAL_MAX_DURATION
 YOUTUBE_TITLE_MIN_WORDS = 5
 YOUTUBE_TITLE_MAX_WORDS = 9
 YOUTUBE_TITLE_IDEAL_MAX_CHARS = 30
+THUMBNAIL_TEXT_MAX_WORDS = 6
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +73,15 @@ def _build_system_prompt(cut_mode: CutMode, min_dur: int, max_dur: int) -> str:
         style = "virais e de alto impacto"
         duration_rule = f"entre {min_dur} e {max_dur} segundos"
         title_rule = "- O título deve ser curto, chamativo e adequado para redes sociais"
+    thumbnail_text_rule = (
+        "- Gere também o campo thumbnail_text para cada clipe\n"
+        f"- O thumbnail_text deve ter no máximo {THUMBNAIL_TEXT_MAX_WORDS} palavras\n"
+        "- O thumbnail_text deve ser independente do título e claramente diferente dele\n"
+        "- Não reaproveite a mesma estrutura, mesma abertura ou as mesmas palavras principais do título\n"
+        "- O thumbnail_text deve ser curto, editorial, impactante e baseado no tema central do trecho\n"
+        "- Evite frases genéricas, clickbait vazio, aspas, emojis e pontuação desnecessária\n"
+        "- Pense no thumbnail_text como texto embutido na thumbnail, não como título do vídeo"
+    )
 
     return f"""\
 Você é um especialista em criação de conteúdo {style} para {audience}.
@@ -91,6 +102,7 @@ REGRAS OBRIGATÓRIAS:
 - Retorne apenas os timestamps precisos encontrados na transcrição
 - Os clipes NÃO devem se sobrepor (sem repetição de conteúdo entre clipes)
 {title_rule}
+{thumbnail_text_rule}
 """
 
 
@@ -153,10 +165,10 @@ _VIRAL_TOOL = {
                         "thumbnail_text": {
                             "type": "string",
                             "description": (
-                                "Frase curta e impactante para exibir na thumbnail — "
-                                "MÁXIMO 6 palavras, estilo chamativo/impactante, "
-                                "DIFERENTE do título, baseada no tema central do clipe. "
-                                "Ex: 'IA VAI DOMINAR O MUNDO', 'SEGREDO QUE NINGUÉM CONTA'"
+                                "Texto curto para embutir na thumbnail, seguindo o PRD: "
+                                f"máximo de {THUMBNAIL_TEXT_MAX_WORDS} palavras, independente do título e diferente dele, "
+                                "baseado no tema central do clipe, editorial e impactante, sem clickbait genérico. "
+                                "Ex: 'CRISE NA DIREITA', 'MBL EM CHOQUE', 'PRESSÃO NO STF'"
                             ),
                         },
                     },
@@ -208,6 +220,56 @@ def _build_user_prompt(segments, max_clips: int | None) -> str:
 
 def _normalize_clip_title(title: str) -> str:
     return " ".join(title.split())
+
+
+def _normalize_thumbnail_token(token: str) -> str:
+    token = re.sub(r"^[^\wÀ-ÿ]+|[^\wÀ-ÿ]+$", "", token, flags=re.UNICODE)
+    return token
+
+
+def _derive_thumbnail_text(title: str, reason: str = "", thumbnail_idea: str = "") -> str:
+    source = reason or thumbnail_idea or ""
+    stopwords = {
+        "A", "AS", "O", "OS", "DE", "DA", "DO", "DAS", "DOS", "E", "EM", "NA", "NO",
+        "NAS", "NOS", "PARA", "POR", "COM", "SEM", "UM", "UMA", "SOBRE", "QUE",
+    }
+    tokens = [_normalize_thumbnail_token(token).upper() for token in source.split()]
+    filtered = [token for token in tokens if token and token not in stopwords]
+    if not filtered:
+        filtered = ["MOMENTO", "EM", "DESTAQUE"]
+    if not filtered:
+        return "MOMENTO EM DESTAQUE"
+    return " ".join(filtered[:THUMBNAIL_TEXT_MAX_WORDS])
+
+
+def _thumbnail_text_too_similar_to_title(raw_text: str, normalized_title: str) -> bool:
+    raw_tokens = [token for token in raw_text.split() if token]
+    title_tokens = [token for token in normalized_title.split() if token]
+    if not raw_tokens or not title_tokens:
+        return False
+
+    raw_set = set(raw_tokens)
+    title_set = set(title_tokens)
+    overlap_ratio = len(raw_set & title_set) / max(1, min(len(raw_set), len(title_set)))
+    if raw_text == normalized_title:
+        return True
+    if raw_text.startswith(title_tokens[0]) and overlap_ratio >= 0.5:
+        return True
+    return overlap_ratio >= 0.8
+
+
+def _normalize_thumbnail_text(text: str, title: str, reason: str = "", thumbnail_idea: str = "") -> str:
+    tokens = [_normalize_thumbnail_token(token).upper() for token in text.split()]
+    tokens = [token for token in tokens if token]
+    raw_normalized = " ".join(tokens).strip()
+    normalized = " ".join(tokens[:THUMBNAIL_TEXT_MAX_WORDS]).strip()
+
+    title_tokens = [_normalize_thumbnail_token(token).upper() for token in title.split()]
+    normalized_title = " ".join(token for token in title_tokens if token)
+
+    if not normalized or _thumbnail_text_too_similar_to_title(raw_normalized, normalized_title):
+        return _derive_thumbnail_text(title, reason, thumbnail_idea)
+    return normalized
 
 
 def _count_words(text: str) -> int:
@@ -291,6 +353,12 @@ def _analyze_chunk(
                 try:
                     raw.pop("cut_mode", None)
                     raw["title"] = _normalize_clip_title(raw.get("title", ""))
+                    raw["thumbnail_text"] = _normalize_thumbnail_text(
+                        raw.get("thumbnail_text", ""),
+                        raw["title"],
+                        raw.get("reason", ""),
+                        raw.get("thumbnail_idea", ""),
+                    )
                     clip = ViralClip(**raw, cut_mode=cut_mode)
                     duration = clip.end_time - clip.start_time
                     if _is_valid_duration(cut_mode, duration):

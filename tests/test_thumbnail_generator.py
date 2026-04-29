@@ -11,12 +11,17 @@ from PIL import Image
 
 from youcut.models import ThumbnailFrameResult, ViralClip
 from youcut.thumbnail_generator import (
+    _build_thumbnail_clip_context,
     _build_thumbnail_generation_prompt,
+    _build_transcript_visual_context,
     _compose_text_overlay,
+    _extract_transcript_visual_elements_fallback,
     _extract_frames_candidates,
     _generate_thumbnail_via_ai,
     _generate_thumbnail_via_ai_result,
+    _load_transcript_excerpt,
     _resize_to_youtube_format,
+    _select_supporting_reference_frames_via_ai_result,
     _select_generation_reference_frames,
     _select_best_face_frame,
     _select_best_frame_via_ai,
@@ -173,6 +178,28 @@ def test_build_thumbnail_result_with_config_calls_ai_stages(tmp_path):
     mock_generation.assert_called_once()
     assert result.selection_method == "ai"
     assert result.generation_method == "ai"
+
+
+def test_build_thumbnail_result_skips_local_text_overlay_when_ai_generation_succeeds(tmp_path):
+    clip = _make_clip("LEGADO MBL")
+    clip_path = tmp_path / "clip.mp4"
+    clip_path.write_bytes(b"fake")
+    output_path = tmp_path / "thumb.png"
+    frame_bytes = _make_png()
+    thumbnail_bytes = _make_png(1280, 720)
+
+    with (
+        patch("youcut.thumbnail_generator._extract_frames_candidates", return_value=[(2.5, frame_bytes)]),
+        patch("youcut.thumbnail_generator._build_ai_clients", return_value=(object(), SimpleNamespace(api_key="test-key"))),
+        patch("youcut.thumbnail_generator._select_best_frame_via_ai_result", return_value=(2.5, frame_bytes, "ai", 1.0)),
+        patch("youcut.thumbnail_generator._generate_thumbnail_via_ai_result", return_value=(thumbnail_bytes, "ai")),
+        patch("youcut.thumbnail_generator._compose_text_overlay") as mock_overlay,
+    ):
+        result = _build_thumbnail_result(clip, clip_path, output_path, SimpleNamespace())
+
+    mock_overlay.assert_not_called()
+    assert result.generation_method == "ai"
+    assert output_path.exists()
 
 
 def test_build_thumbnail_result_methods_populated(tmp_path):
@@ -418,6 +445,94 @@ def test_build_thumbnail_generation_prompt_uses_doc_context():
     assert "Video title context: Teste." in prompt
 
 
+def test_build_thumbnail_generation_prompt_embeds_text_rules_when_requested():
+    with patch(
+        "youcut.thumbnail_generator._load_thumbnail_prompt_context",
+        return_value="PRD guidance: text area max 7%.",
+    ):
+        prompt = _build_thumbnail_generation_prompt(
+            "Teste",
+            thumbnail_text="LEGADO DO MBL",
+            clip_context="Debate sobre estrategia digital, MBL e publico jovem.",
+            transcript_visual_context="referência sutil a eleição e campanha | referência sutil a segurança pública",
+        )
+
+    assert 'Embed exactly this thumbnail text inside the generated image: "LEGADO DO MBL".' in prompt
+    assert 'Render the secondary text in bright yellow (#FFD54A): "LEGADO DO".' in prompt
+    assert 'Render the hero text larger in vivid orange (#FF8A00): "MBL".' in prompt
+    assert "Prefer bright yellow and vivid orange text accents" in prompt
+    assert "at most 7% of the total image area" in prompt
+    assert "Do not add any text, captions, words" not in prompt
+    assert "If the reference frames show more than one relevant person" in prompt
+    assert "Use additional reference frames to bring in complementary people" in prompt
+    assert "The people and their expressions must remain the main focus of the thumbnail." in prompt
+    assert "Clip thematic context: Debate sobre estrategia digital, MBL e publico jovem." in prompt
+    assert "Transcript-derived subtle visual motifs: referência sutil a eleição e campanha | referência sutil a segurança pública." in prompt
+
+
+def test_build_thumbnail_clip_context_uses_clip_metadata():
+    clip = _make_clip("LEGADO DO MBL")
+
+    context = _build_thumbnail_clip_context(clip)
+
+    assert "Host explaining excitedly" in context
+    assert "High energy" in context
+    assert "The host explains the main topic." in context
+    assert "#youtube" in context
+
+
+def test_load_transcript_excerpt_reads_sidecar_cache(tmp_path):
+    video_path = tmp_path / "clip.mp4"
+    video_path.write_bytes(b"fake")
+    transcript_path = tmp_path / "clip_transcript.json"
+    transcript_path.write_text(
+        json.dumps({
+            "result": {
+                "segments": [
+                    {"text": "Primeiro trecho do debate."},
+                    {"text": "Segundo trecho com seguranca publica."},
+                ]
+            }
+        }),
+        encoding="utf-8",
+    )
+
+    excerpt = _load_transcript_excerpt(video_path)
+
+    assert "Primeiro trecho do debate." in excerpt
+    assert "Segundo trecho com seguranca publica." in excerpt
+
+
+def test_extract_transcript_visual_elements_fallback_maps_themes():
+    excerpt = "Tema de eleicoes, campanha, seguranca publica e redes sociais entre candidatos."
+
+    elements = _extract_transcript_visual_elements_fallback(excerpt)
+
+    assert "referência sutil a eleição e campanha" in elements
+    assert "referência sutil a segurança pública" in elements
+    assert "referência sutil a mídia e ambiente digital" in elements
+
+
+def test_build_transcript_visual_context_uses_fallback_without_ai(tmp_path):
+    video_path = tmp_path / "clip.mp4"
+    video_path.write_bytes(b"fake")
+    transcript_path = tmp_path / "clip_transcript.json"
+    transcript_path.write_text(
+        json.dumps({
+            "result": {
+                "segments": [
+                    {"text": "Discussao sobre eleicoes e seguranca publica."},
+                ]
+            }
+        }),
+        encoding="utf-8",
+    )
+
+    context = _build_transcript_visual_context(video_path, "Teste", None)
+
+    assert "referência sutil a eleição e campanha" in context
+
+
 def test_generate_thumbnail_via_ai_fallback_when_no_client(caplog):
     input_png = _make_png(640, 360)
 
@@ -485,6 +600,58 @@ def test_generate_thumbnail_via_ai_uses_built_prompt():
         _generate_thumbnail_via_ai_result(input_png, "Teste", client)
 
     assert mock_skill.call_args.kwargs["prompt"] == "PROMPT_FROM_DOCS"
+
+
+def test_generate_thumbnail_via_ai_passes_thumbnail_text_to_prompt_builder():
+    input_png = _make_png(640, 360)
+    client = SimpleNamespace(api_key="test-key")
+
+    with patch(
+        "youcut.thumbnail_generator._build_thumbnail_generation_prompt",
+        return_value="PROMPT_FROM_DOCS",
+    ) as mock_prompt, patch(
+        "youcut.thumbnail_generator._run_thumbnail_skill_script",
+        return_value=_make_png(1536, 864),
+    ):
+        _generate_thumbnail_via_ai_result(input_png, "Teste", client, thumbnail_text="LEGADO MBL")
+
+    assert mock_prompt.call_args.kwargs["thumbnail_text"] == "LEGADO MBL"
+
+
+def test_select_supporting_reference_frames_via_ai_returns_principal_plus_supporting():
+    frames = [(0.0, b"a"), (1.0, b"b"), (2.0, b"c"), (3.0, b"d")]
+    response = SimpleNamespace(content=[SimpleNamespace(text='{"supporting_indices": [3, 0], "reason": "second guest and wider shot"}')])
+    client = MagicMock()
+    client.with_options.return_value = client
+    client.messages.create.return_value = response
+
+    result = _select_supporting_reference_frames_via_ai_result(
+        frames,
+        "Teste",
+        selected_timestamp=1.0,
+        anthropic_client=client,
+        clip_context="Debate entre duas pessoas",
+        max_frames=4,
+    )
+
+    assert result == [b"b", b"d", b"a"]
+
+
+def test_select_supporting_reference_frames_via_ai_falls_back_to_neighbors():
+    frames = [(float(index), bytes([index])) for index in range(5)]
+    client = MagicMock()
+    client.with_options.return_value = client
+    client.messages.create.side_effect = RuntimeError("api error")
+
+    result = _select_supporting_reference_frames_via_ai_result(
+        frames,
+        "Teste",
+        selected_timestamp=2.0,
+        anthropic_client=client,
+        max_frames=4,
+    )
+
+    assert result == [b"\x02", b"\x01", b"\x03", b"\x00"]
 
 
 def test_select_generation_reference_frames_prefers_neighbors():

@@ -218,6 +218,69 @@ class TestFlowAYouTubeClipFormat:
         # The clip passed to cut_clip must have cut_mode="youtube"
         assert cut_calls[0].cut_mode == "youtube"
 
+
+class TestFlowAThumbnailTextBehavior:
+    def test_run_flow_a_preserves_analyzer_thumbnail_text_by_default(
+        self, youtube_config, mock_transcription, mock_viral_clip_youtube, video_path, clip_path
+    ):
+        captured_thumbnail_texts: list[str] = []
+
+        def capture_thumbnail(clip, output_dir, clip_index, clip_path=None, config=None):
+            captured_thumbnail_texts.append(clip.thumbnail_text)
+            thumb = output_dir / "thumbnails" / f"clip_{clip_index:02d}.png"
+            thumb.parent.mkdir(parents=True, exist_ok=True)
+            thumb.touch()
+            return thumb
+
+        with (
+            patch("youcut.cli.download_video", return_value=video_path),
+            patch("youcut.cli.transcribe", return_value=mock_transcription),
+            patch("youcut.cli.analyze", return_value=[mock_viral_clip_youtube]),
+            patch("youcut.cli.cut_clip", return_value=clip_path),
+            patch("youcut.cli.generate_thumbnail", side_effect=capture_thumbnail),
+            patch("youcut.cli.save_session", return_value=Path("/tmp/s.json")),
+        ):
+            from youcut.cli import run_flow_a
+            run_flow_a(
+                "https://youtube.com/watch?v=test",
+                youtube_config,
+                skip_review=True,
+                upload=False,
+            )
+
+        assert captured_thumbnail_texts == ["MOMENTO IMPACTANTE"]
+
+    def test_run_flow_a_thumbnail_text_option_overrides_analyzer_text(
+        self, youtube_config, mock_transcription, mock_viral_clip_youtube, video_path, clip_path
+    ):
+        captured_thumbnail_texts: list[str] = []
+        youtube_config.thumbnail_text = "TEXTO FORCADO"
+
+        def capture_thumbnail(clip, output_dir, clip_index, clip_path=None, config=None):
+            captured_thumbnail_texts.append(clip.thumbnail_text)
+            thumb = output_dir / "thumbnails" / f"clip_{clip_index:02d}.png"
+            thumb.parent.mkdir(parents=True, exist_ok=True)
+            thumb.touch()
+            return thumb
+
+        with (
+            patch("youcut.cli.download_video", return_value=video_path),
+            patch("youcut.cli.transcribe", return_value=mock_transcription),
+            patch("youcut.cli.analyze", return_value=[mock_viral_clip_youtube]),
+            patch("youcut.cli.cut_clip", return_value=clip_path),
+            patch("youcut.cli.generate_thumbnail", side_effect=capture_thumbnail),
+            patch("youcut.cli.save_session", return_value=Path("/tmp/s.json")),
+        ):
+            from youcut.cli import run_flow_a
+            run_flow_a(
+                "https://youtube.com/watch?v=test",
+                youtube_config,
+                skip_review=True,
+                upload=False,
+            )
+
+        assert captured_thumbnail_texts == ["TEXTO FORCADO"]
+
     def test_flow_a_shows_guidance_when_shorter_youtube_fallbacks_exist(
         self,
         youtube_config,

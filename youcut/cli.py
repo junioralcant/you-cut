@@ -376,7 +376,7 @@ def run(
     thumbnail_text: str = typer.Option(
         "",
         "--thumbnail-text",
-        help="Texto opcional para sobrepor na thumbnail; vazio por padrão",
+        help="Texto opcional para sobrescrever o texto padrão sugerido pela IA na thumbnail",
     ),
     upload: bool = typer.Option(False, "--upload", help="Faz upload dos clipes ao final do pipeline"),
     platforms_raw: str = typer.Option(
@@ -928,7 +928,8 @@ def run_flow_a(
         task_th = progress.add_task("Gerando thumbnails...", total=len(viral_clips))
         for i, clip in enumerate(viral_clips):
             try:
-                clip.thumbnail_text = config.thumbnail_text
+                if config.thumbnail_text.strip():
+                    clip.thumbnail_text = config.thumbnail_text
                 clip_path_for_thumb = clip_paths[i] if i < len(clip_paths) else None
                 thumb = generate_thumbnail(clip, output_dir, i, clip_path=clip_path_for_thumb, config=config)
                 thumbnail_paths.append(thumb)
@@ -1554,7 +1555,7 @@ def cuts(
     thumbnail_text: str = typer.Option(
         "",
         "--thumbnail-text",
-        help="Texto opcional para sobrepor na thumbnail do Flow A",
+        help="Texto opcional para sobrescrever o texto padrão sugerido pela IA na thumbnail do Flow A",
     ),
     platforms_raw: str = typer.Option(
         "all", "--platforms", help="Plataformas de upload: youtube, instagram, tiktok ou all"

@@ -9,6 +9,7 @@ from youcut.analyzer import (
     MAX_CLIP_DURATION,
     MIN_CLIP_DURATION,
     _SYSTEM_PROMPT,
+    _normalize_thumbnail_text,
     analyze,
 )
 from youcut.models import TranscriptionResult, TranscriptionSegment, ViralClip, WordTimestamp
@@ -118,6 +119,92 @@ class TestAnalyzeMapping:
         assert clip.description == raw["description"]
         assert clip.hashtags == raw["hashtags"]
         assert clip.thumbnail_idea == raw["thumbnail_idea"]
+        assert clip.thumbnail_text == raw["thumbnail_text"]
+
+    def test_thumbnail_text_is_normalized_to_prd_style(self, config, short_transcription):
+        raw = {
+            "title": "Título Teste",
+            "reason": "Razão Teste",
+            "viral_score": 7.5,
+            "start_time": 10.0,
+            "end_time": 40.0,
+            "description": "Descrição Teste",
+            "hashtags": ["#a", "#b"],
+            "thumbnail_idea": "Ideia Thumbnail",
+            "thumbnail_text": '  eleiÇÃO   pega fogo!!!  ',
+        }
+        mock_client = _make_mock_client([raw])
+
+        with patch("youcut.analyzer.anthropic.Anthropic", return_value=mock_client):
+            result = analyze(short_transcription, config)
+
+        assert result[0].thumbnail_text == "ELEIÇÃO PEGA FOGO"
+
+    def test_thumbnail_text_empty_falls_back_to_derived_text(self, config, short_transcription):
+        raw = {
+            "title": "Renan Santos fala sobre eleições e segurança",
+            "reason": "Discussão forte sobre segurança pública e campanha",
+            "viral_score": 7.5,
+            "start_time": 10.0,
+            "end_time": 40.0,
+            "description": "Descrição Teste",
+            "hashtags": ["#a", "#b"],
+            "thumbnail_idea": "Ideia Thumbnail",
+            "thumbnail_text": "",
+        }
+        mock_client = _make_mock_client([raw])
+
+        with patch("youcut.analyzer.anthropic.Anthropic", return_value=mock_client):
+            result = analyze(short_transcription, config)
+
+        assert result[0].thumbnail_text == "DISCUSSÃO FORTE SEGURANÇA PÚBLICA CAMPANHA"
+
+    def test_thumbnail_text_equal_to_title_falls_back_to_derived_text(self, config, short_transcription):
+        raw = {
+            "title": "Renan Santos fala sobre eleições e segurança",
+            "reason": "Discussão forte sobre segurança pública e campanha",
+            "viral_score": 7.5,
+            "start_time": 10.0,
+            "end_time": 40.0,
+            "description": "Descrição Teste",
+            "hashtags": ["#a", "#b"],
+            "thumbnail_idea": "Ideia Thumbnail",
+            "thumbnail_text": "Renan Santos fala sobre eleições e segurança",
+        }
+        mock_client = _make_mock_client([raw])
+
+        with patch("youcut.analyzer.anthropic.Anthropic", return_value=mock_client):
+            result = analyze(short_transcription, config)
+
+        assert result[0].thumbnail_text == "DISCUSSÃO FORTE SEGURANÇA PÚBLICA CAMPANHA"
+
+    def test_thumbnail_text_too_similar_to_title_falls_back_to_derived_text(self, config, short_transcription):
+        raw = {
+            "title": "Renan Santos fala sobre eleições e segurança",
+            "reason": "Discussão forte sobre segurança pública e campanha",
+            "viral_score": 7.5,
+            "start_time": 10.0,
+            "end_time": 40.0,
+            "description": "Descrição Teste",
+            "hashtags": ["#a", "#b"],
+            "thumbnail_idea": "Ideia Thumbnail",
+            "thumbnail_text": "Renan Santos nas eleições",
+        }
+        mock_client = _make_mock_client([raw])
+
+        with patch("youcut.analyzer.anthropic.Anthropic", return_value=mock_client):
+            result = analyze(short_transcription, config)
+
+        assert result[0].thumbnail_text == "DISCUSSÃO FORTE SEGURANÇA PÚBLICA CAMPANHA"
+
+    def test_normalize_thumbnail_text_truncates_to_six_words(self):
+        normalized = _normalize_thumbnail_text(
+            "um texto muito longo com palavras demais para thumbnail",
+            title="Titulo qualquer",
+            reason="Razão qualquer",
+        )
+
+        assert normalized == "UM TEXTO MUITO LONGO COM PALAVRAS"
 
 
 class TestAnalyzeSorting:
