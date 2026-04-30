@@ -16,3 +16,4 @@ prompt.md
 .agents
 youtube-oauth.json
 cookies.txt
+.claude/settings.local.json

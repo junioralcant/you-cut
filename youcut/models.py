@@ -128,3 +128,75 @@ class ThumbnailFrameResult(BaseModel):
     output_path: Path
     selection_method: Literal["ai", "local"] = "local"
     generation_method: Literal["ai", "local"] = "local"
+
+
+CastKind = Literal["person", "animal", "object"]
+PanelFraming = Literal["close", "medium", "wide", "two_shot"]
+
+
+class CastMember(BaseModel):
+    character_id: str
+    kind: CastKind = "person"
+    gender_apparent: str = ""
+    age_apparent: str = ""
+    hair: str = ""
+    facial_hair: str = ""
+    skin: str = ""
+    clothing: str = ""
+    accessories: list[str] = []
+    narrative_role: str = ""
+    speaker_id: str | None = None
+    source_frame_path: Path | None = None
+    anchor_image_path: Path | None = None
+    text_card: str = ""
+
+
+class Panel(BaseModel):
+    index: int
+    start_time: float
+    end_time: float
+    participants: list[str]
+    framing: PanelFraming
+    scene: str
+    pose_description: str
+    panel_seconds_target: float
+
+    @field_validator("end_time")
+    @classmethod
+    def validate_end_after_start(cls, v: float, info) -> float:
+        start = info.data.get("start_time")
+        if start is not None and v <= start:
+            raise ValueError(
+                f"end_time ({v}) deve ser maior que start_time ({start})"
+            )
+        return v
+
+    @field_validator("panel_seconds_target")
+    @classmethod
+    def validate_seconds_positive(cls, v: float) -> float:
+        if v <= 0:
+            raise ValueError(f"panel_seconds_target deve ser positivo, recebido {v}")
+        return v
+
+
+class PanelRenderResult(BaseModel):
+    panel_index: int
+    base_image_path: Path
+    clip_path: Path
+    clip_seconds: float
+    was_static_fallback: bool = False
+    image_attempts: int = 1
+    i2v_attempts: int = 0
+    cost_usd: float = 0.0
+
+
+class MotionComicSession(BaseModel):
+    session_id: str
+    video_path: Path
+    created_at: datetime
+    transcription_cache_path: Path | None = None
+    cast: list[CastMember] = []
+    panels: list[Panel] = []
+    panel_results: list[PanelRenderResult] = []
+    total_cost_usd: float = 0.0
+    output_path: Path | None = None

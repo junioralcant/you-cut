@@ -30,6 +30,13 @@ face-tracking = [
     "pyannote.audio>=3.1",
     "opencv-python>=4.8",
 ]
+comic = [
+    "runwayml>=3.0",
+    "fal-client>=0.4",
+    "replicate>=1.0",
+    "mediapipe>=0.10",
+    "opencv-python>=4.8",
+]
 dev = [
     "pytest>=8.0.0",
     "pytest-env>=1.1.0",

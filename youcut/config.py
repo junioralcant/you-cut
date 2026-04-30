@@ -46,6 +46,22 @@ class PipelineConfig(BaseSettings):
     social_layout_title_bg_color: str = "#F4C400"
     social_layout_title_text_color: str = "#111111"
 
+    runway_api_key: str | None = None
+    fal_api_key: str | None = None
+    replicate_api_token: str | None = None
+    comic_max_panels: int = 30
+    comic_cost_cap_usd: float = 10.0
+    comic_image_provider: Literal["gpt-image-1"] = "gpt-image-1"
+    comic_i2v_provider: Literal["runway", "fal", "replicate"] = "runway"
+    comic_i2v_fal_model: str = "fal-ai/kling-video/v2.5-turbo/pro/image-to-video"
+    comic_i2v_replicate_model: str = "kwaivgi/kling-v1.6-pro"
+    comic_image_retries: int = 2
+    comic_i2v_retries: int = 2
+    comic_panel_min_seconds: float = 2.0
+    comic_panel_max_seconds: float = 5.0
+    comic_i2v_concurrency: int = 1
+    comic_i2v_max_poll_seconds: float = 3600.0
+
     @model_validator(mode="after")
     def validate_api_key_present(self) -> "PipelineConfig":
         if not self.anthropic_api_key or not self.anthropic_api_key.strip():

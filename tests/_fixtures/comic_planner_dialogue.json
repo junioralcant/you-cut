@@ -1,0 +1,52 @@
+{
+  "panels": [
+    {
+      "start_time": 0.0,
+      "end_time": 3.0,
+      "participants": ["entrevistador"],
+      "framing": "close",
+      "scene": "estúdio neutro",
+      "pose_description": "fazendo pergunta com gesto de mão"
+    },
+    {
+      "start_time": 3.0,
+      "end_time": 6.0,
+      "participants": ["convidada"],
+      "framing": "close",
+      "scene": "estúdio neutro",
+      "pose_description": "respondendo com sorriso"
+    },
+    {
+      "start_time": 6.0,
+      "end_time": 10.0,
+      "participants": ["convidada", "entrevistador"],
+      "framing": "two_shot",
+      "scene": "estúdio neutro",
+      "pose_description": "ambos rindo juntos"
+    },
+    {
+      "start_time": 10.0,
+      "end_time": 13.0,
+      "participants": ["entrevistador"],
+      "framing": "close",
+      "scene": "estúdio neutro",
+      "pose_description": "atento, ouvindo"
+    },
+    {
+      "start_time": 13.0,
+      "end_time": 16.0,
+      "participants": ["convidada"],
+      "framing": "close",
+      "scene": "estúdio neutro",
+      "pose_description": "expressando uma ideia importante"
+    },
+    {
+      "start_time": 16.0,
+      "end_time": 20.0,
+      "participants": ["convidada", "entrevistador"],
+      "framing": "two_shot",
+      "scene": "estúdio neutro",
+      "pose_description": "concluindo conversa"
+    }
+  ]
+}

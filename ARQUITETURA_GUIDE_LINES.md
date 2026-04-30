@@ -355,7 +355,30 @@
 
 #### `~/.youcut/` (estado do usuário, fora do repo)
 - `credentials/{youtube,instagram,tiktok}.json` — tokens OAuth (modo 0600).
-- `sessions/<id>.json` — `SessionData` para o Fluxo B.
+- `sessions/<id>.json` — `SessionData` para o Fluxo B **ou** `MotionComicSession` (discriminado por presença de `cast`+`panels`).
+
+---
+
+## 5b. Subpacote `youcut/comic/` (motion comic)
+
+Pipeline isolado que converte vídeos curtos (≤120 s) em motion comics 9:16 reusando Whisper, Claude e adicionando `gpt-image-1` (imagens) + Runway `gen4_turbo` (image-to-video).
+
+| Arquivo | Papel |
+|---|---|
+| `comic/__init__.py` | Re-exporta `run_comic_pipeline`, `PipelineCallbacks`, `ComicPipelineError`. |
+| `comic/cli.py` | Subcomando `youcut comic <video>` com flags `--dry-run`, `--session`, `--regenerate-panel`, `--max-panels`, `--cost-cap`, `--yes`, `--no-progress`. UX rich + typer.confirm. |
+| `comic/pipeline.py` | Orquestrador `run_comic_pipeline` — valida, transcreve, diariza, detecta cast, planeja painéis, estima custo, aplica cap, renderiza, compõe. |
+| `comic/validator.py` | RF-01/RF-02: aceita mp4/mov/mkv/webm, rejeita >120 s. Retorna `VideoSpec`. |
+| `comic/visual_analyzer.py` | MediaPipe (até 8 frames com rostos) + Claude vision (`extract_cast` tool) → `list[CastMember]`. Mapeia speaker→pessoa via `spatial_position` quando ≤2/≤2. Fallback genérico se 0 rostos. |
+| `comic/cast_builder.py` | Gera ficha textual + imagem-âncora 1024×1024 por personagem (gpt-image-1). Idempotente: reusa arquivo `output/<v>/comic/cast/<id>.png` se existir. |
+| `comic/script_planner.py` | Claude texto com tool `plan_panels` → `list[Panel]`. Valida cadência, soma e sobreposição; até 1 retry corretivo com hint da invariante violada. |
+| `comic/panel_renderer.py` | Por painel: imagem-base 9:16 (gpt-image-1, refs até 3) + i2v (Runway `gen4_turbo`, ratio `720:1280`) ou fallback estático (`ffmpeg -loop 1 -t`). Paralelismo `asyncio.Semaphore(comic_i2v_concurrency)`. |
+| `comic/composer.py` | Extend (`tpad=stop_mode=clone`) ou trim por painel → concat demuxer → mux áudio (`-c:a copy`, hash bit-idêntico) → burn legendas word-by-word. Saída em `output/<v>/motion_comic.mp4`. |
+| `comic/cost_estimator.py` | `PriceTable` + `estimate_cost` + `enforce_cap` (pt-BR) + `preflight`. Defaults: anchor $0.04, base $0.04/img, i2v $0.05/s. |
+| `comic/session.py` | `save/load/list_motion_comic_session` em `~/.youcut/sessions/<id>.json`. Discrimina de `SessionData` legado por presença de `cast`+`panels`. |
+| `comic/run_report.py` | `build_run_report` + `write_run_report` em `output/<v>/comic/run_report.json` (`schema_version=1`). Inclui `total_cost_usd`, `n_panels`, `n_static_fallbacks`, `total_seconds`, `provider_latency_p50/p95`. |
+| `comic/providers/images.py` | Protocol `ImageProvider` + `OpenAIImageProvider` (gpt-image-1) com retry exponencial. |
+| `comic/providers/i2v.py` | Protocol `ImageToVideoProvider` + `RunwayProvider` (gen4_turbo) com polling até `SUCCEEDED`/`FAILED`/`CANCELED`, retry exponencial e fallback de download por data URL/http. |
 
 ---
 

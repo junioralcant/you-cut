@@ -48,6 +48,13 @@ Flags relevantes: `--max-clips/-n`, `--skip-review`, `--upload`, `--platforms`, 
 ### `youcut auth login|revoke|status`
 Gerencia tokens OAuth de YouTube / Instagram / TikTok, salvos em `~/.youcut/credentials/<plataforma>.json`.
 
+### `youcut comic <video>`
+Pipeline **motion comic**: aceita um vídeo local curto (≤120 s) e gera um MP4 9:16 (1080×1920) com personagens ilustrados, áudio original preservado e legendas queimadas. Estética minimalista pastel com cabeças circulares brancas; consistência entre painéis via fichas-âncora geradas uma única vez por personagem (gpt-image-1 + Runway Gen-4 Turbo). Sai em `output/<video>/motion_comic.mp4` com `comic/run_report.json` para auditoria.
+
+Flags relevantes: `--max-panels/-n`, `--cost-cap`, `--dry-run`, `--session <id>`, `--regenerate-panel I[,J,...]`, `--yes/-y`, `--no-progress`.
+
+Variáveis adicionais: `RUNWAY_API_KEY` (obrigatória) e `OPENAI_API_KEY` (obrigatória para o `comic`).
+
 ---
 
 ## 3. Pipeline (Como Funciona)
@@ -77,6 +84,18 @@ Gerencia tokens OAuth de YouTube / Instagram / TikTok, salvos em `~/.youcut/cred
 - Análise pede 15–25 min com fallback de 5 min se não houver trechos longos suficientes.
 - Títulos: 5–9 palavras, idealmente ≤30 caracteres.
 - Sem face tracking nem composição social — é stream copy direto.
+
+### 3.3 Pipeline `youcut comic` (motion comic)
+1. **Validação** (`comic/validator.py`) — aceita mp4/mov/mkv/webm; rejeita >120 s com mensagem em pt-BR.
+2. **Transcrição** (`transcriber.py`) — reaproveita o stack existente.
+3. **Diarização** (`diarizer.py`) — fallback `SPEAKER_00` quando sem token.
+4. **Visual analyzer** (`comic/visual_analyzer.py`) — MediaPipe amostra até 8 frames com rostos; Claude vision extrai cast (gênero, idade, cabelo, barba, roupa, adereços, animais/objetos).
+5. **Cast builder** (`comic/cast_builder.py`) — gera ficha textual + imagem-âncora 1024×1024 (gpt-image-1 com `input_fidelity="high"`) **uma única vez** por personagem; idempotente em retomadas.
+6. **Script planner** (`comic/script_planner.py`) — Claude texto divide a transcrição em painéis 2–5 s respeitando cadência (≥1/5 s, ≤1/1,5 s) e soma ≈ duração do áudio (±0,2 s); retry corretivo automático.
+7. **Cost estimator + cap** (`comic/cost_estimator.py`) — exibe breakdown e enforcement do teto duro (`comic_cost_cap_usd`, default $10) **antes** de qualquer chamada paga.
+8. **Panel renderer** (`comic/panel_renderer.py`) — para cada painel: imagem-base 9:16 (gpt-image-1) com fichas-âncora como `reference_images` → mini-clipe 2–5 s (Runway `gen4_turbo`, ratio `720:1280`) → fallback estático via `ffmpeg -loop 1` quando i2v falha. Paralelismo via `asyncio.Semaphore(comic_i2v_concurrency)`.
+9. **Composer** (`comic/composer.py`) — extend (`tpad=stop_mode=clone`) ou trim por painel → concat demuxer → mux do áudio original com `-c:a copy` → queima legendas palavra-a-palavra reusando `youcut.captioner.build_ass_for_words`.
+10. **Sessão e relatório** (`comic/session.py`, `comic/run_report.py`) — persistência em `~/.youcut/sessions/<id>.json` (discriminada por `cast`+`panels`) e métricas em `output/<video>/comic/run_report.json` (`schema_version=1`).
 
 ---
 
@@ -110,6 +129,23 @@ youcut/
   reviewer.py             TUI de aprovação por clipe
   exporter.py             escreve clip_NN.txt
   session_store.py        persistência em ~/.youcut/sessions/
+
+  comic/                  pipeline motion comic (`youcut comic`)
+    __init__.py           re-export `run_comic_pipeline`
+    cli.py                subcomando Typer + UX interativa
+    pipeline.py           orquestrador (validate→transcribe→…→compose)
+    validator.py          RF-01/RF-02 (mp4/mov/mkv/webm, ≤120s, pt-BR)
+    visual_analyzer.py    MediaPipe + Claude vision → list[CastMember]
+    cast_builder.py       fichas-âncora 1024×1024 (idempotente)
+    script_planner.py     Claude texto → list[Panel] (cadência ≥1/5s)
+    panel_renderer.py     gpt-image-1 + Runway gen4_turbo + fallback
+    composer.py           concat + audio mux + legendas word-by-word
+    cost_estimator.py     PriceTable + enforce_cap pt-BR
+    session.py            save/load/list MotionComicSession
+    run_report.py         run_report.json (schema_version=1)
+    providers/
+      images.py           OpenAIImageProvider (gpt-image-1)
+      i2v.py              RunwayProvider (gen4_turbo)
 
   uploader/
     __init__.py           orquestra upload_clips() multi-plataforma

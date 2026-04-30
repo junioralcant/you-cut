@@ -1,0 +1,44 @@
+{
+  "panels": [
+    {
+      "start_time": 0.0,
+      "end_time": 4.0,
+      "participants": ["narrator"],
+      "framing": "wide",
+      "scene": "rua urbana movimentada",
+      "pose_description": "narrador caminhando entre pessoas"
+    },
+    {
+      "start_time": 4.0,
+      "end_time": 8.0,
+      "participants": ["narrator"],
+      "framing": "wide",
+      "scene": "mercado público colorido",
+      "pose_description": "narrador olhando bancas de frutas"
+    },
+    {
+      "start_time": 8.0,
+      "end_time": 12.0,
+      "participants": ["narrator"],
+      "framing": "medium",
+      "scene": "café aconchegante",
+      "pose_description": "narrador sentado em mesa de café"
+    },
+    {
+      "start_time": 12.0,
+      "end_time": 15.0,
+      "participants": ["narrator"],
+      "framing": "close",
+      "scene": "café aconchegante",
+      "pose_description": "olhando xícara"
+    },
+    {
+      "start_time": 15.0,
+      "end_time": 18.0,
+      "participants": ["narrator"],
+      "framing": "wide",
+      "scene": "praça arborizada",
+      "pose_description": "narrador caminhando devagar"
+    }
+  ]
+}

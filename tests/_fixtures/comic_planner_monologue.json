@@ -1,0 +1,68 @@
+{
+  "panels": [
+    {
+      "start_time": 0.0,
+      "end_time": 4.0,
+      "participants": ["narrator"],
+      "framing": "close",
+      "scene": "interior neutro",
+      "pose_description": "olhar direto para a câmera, leve sorriso"
+    },
+    {
+      "start_time": 4.0,
+      "end_time": 8.0,
+      "participants": ["narrator"],
+      "framing": "medium",
+      "scene": "sala de estar",
+      "pose_description": "gesto explicativo com a mão"
+    },
+    {
+      "start_time": 8.0,
+      "end_time": 12.0,
+      "participants": ["narrator"],
+      "framing": "close",
+      "scene": "sala de estar",
+      "pose_description": "expressão pensativa"
+    },
+    {
+      "start_time": 12.0,
+      "end_time": 16.0,
+      "participants": ["narrator"],
+      "framing": "medium",
+      "scene": "sala de estar",
+      "pose_description": "olhar para o lado"
+    },
+    {
+      "start_time": 16.0,
+      "end_time": 20.0,
+      "participants": ["narrator"],
+      "framing": "close",
+      "scene": "sala de estar",
+      "pose_description": "risada espontânea"
+    },
+    {
+      "start_time": 20.0,
+      "end_time": 24.0,
+      "participants": ["narrator"],
+      "framing": "medium",
+      "scene": "sala de estar",
+      "pose_description": "ombros relaxados"
+    },
+    {
+      "start_time": 24.0,
+      "end_time": 28.0,
+      "participants": ["narrator"],
+      "framing": "close",
+      "scene": "sala de estar",
+      "pose_description": "olhar conclusivo"
+    },
+    {
+      "start_time": 28.0,
+      "end_time": 30.0,
+      "participants": ["narrator"],
+      "framing": "close",
+      "scene": "sala de estar",
+      "pose_description": "leve aceno"
+    }
+  ]
+}

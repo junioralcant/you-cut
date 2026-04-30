@@ -50,6 +50,10 @@ app = typer.Typer(name="youcut", help="Gerador automático de clipes virais a pa
 app_auth = typer.Typer(help="Gerencia autenticação das plataformas de upload")
 app.add_typer(app_auth, name="auth")
 
+from youcut.comic.cli import comic_command  # noqa: E402
+
+app.command(name="comic", help="Gera motion comics 9:16 a partir de vídeos curtos (≤120s).")(comic_command)
+
 
 @app.callback()
 def _main() -> None:

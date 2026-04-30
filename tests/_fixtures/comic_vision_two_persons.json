@@ -1,0 +1,28 @@
+{
+  "characters": [
+    {
+      "kind": "person",
+      "gender_apparent": "masculino",
+      "age_apparent": "adulto",
+      "hair": "cabelo curto preto",
+      "facial_hair": "barba média",
+      "skin": "pele morena",
+      "clothing": "camiseta verde",
+      "accessories": ["óculos"],
+      "narrative_role": "entrevistador",
+      "spatial_position": "left"
+    },
+    {
+      "kind": "person",
+      "gender_apparent": "feminino",
+      "age_apparent": "adulta",
+      "hair": "cabelo loiro liso longo",
+      "facial_hair": "",
+      "skin": "pele clara",
+      "clothing": "blusa rosa",
+      "accessories": [],
+      "narrative_role": "convidada",
+      "spatial_position": "right"
+    }
+  ]
+}

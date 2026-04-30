@@ -21,8 +21,8 @@ _PHRASE_STYLE = (
 _ASS_HEADER = """\
 [Script Info]
 ScriptType: v4.00+
-PlayResX: 1080
-PlayResY: 1920
+PlayResX: {res_x}
+PlayResY: {res_y}
 ScaledBorderAndShadow: yes
 
 [V4+ Styles]
@@ -109,6 +109,23 @@ def _generate_phrase_events(
     return "\n".join(lines)
 
 
+def build_ass_for_words(
+    words: list[WordTimestamp],
+    *,
+    output_size: tuple[int, int] = (1080, 1920),
+    offset: float = 0.0,
+) -> str:
+    """Constrói um documento ASS palavra-a-palavra reusável.
+
+    ``words`` deve estar com timestamps absolutos; ``offset`` os normaliza
+    para o início do segmento alvo. ``output_size`` ajusta ``PlayResX``/Y.
+    """
+    res_x, res_y = output_size
+    header = _ASS_HEADER.format(res_x=res_x, res_y=res_y, style=_WORD_STYLE)
+    events = _generate_word_events(words, offset)
+    return header + events + "\n"
+
+
 def add_captions(
     clip_path: Path,
     transcription: TranscriptionResult,
@@ -118,7 +135,7 @@ def add_captions(
     """Burn subtitles into clip_path and return the same path."""
     offset = clip.start_time
     style_line = _WORD_STYLE if config.subtitle_style == "word" else _PHRASE_STYLE
-    header = _ASS_HEADER.format(style=style_line)
+    header = _ASS_HEADER.format(res_x=1080, res_y=1920, style=style_line)
 
     if config.subtitle_style == "word":
         words = _filter_words(transcription, clip.start_time, clip.end_time)

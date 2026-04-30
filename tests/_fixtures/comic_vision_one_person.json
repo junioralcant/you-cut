@@ -1,0 +1,16 @@
+{
+  "characters": [
+    {
+      "kind": "person",
+      "gender_apparent": "feminino",
+      "age_apparent": "adulta jovem",
+      "hair": "cabelo castanho ondulado pelos ombros",
+      "facial_hair": "",
+      "skin": "pele clara",
+      "clothing": "camiseta branca e jaqueta jeans",
+      "accessories": ["brincos pequenos"],
+      "narrative_role": "narradora principal",
+      "spatial_position": "center"
+    }
+  ]
+}

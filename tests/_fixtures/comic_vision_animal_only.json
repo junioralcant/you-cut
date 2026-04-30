@@ -1,0 +1,10 @@
+{
+  "characters": [
+    {
+      "kind": "animal",
+      "narrative_role": "cachorro do narrador",
+      "accessories": ["coleira vermelha"],
+      "spatial_position": "center"
+    }
+  ]
+}
