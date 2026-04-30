@@ -42,6 +42,8 @@ def cut_clip(
 
     if clip.cut_mode == "youtube":
         cmd = _build_youtube_cmd(video_path, clip, output_path)
+    elif clip.cut_mode == "social" and config.social_layout_mode == "speaker_bottom_ai_top":
+        cmd = _build_social_raw_cmd(video_path, clip, output_path)
     else:
         cmd = _build_social_cmd(video_path, clip, config, output_path)
 
@@ -56,6 +58,30 @@ def cut_clip(
         output_path = CaptionBurner().burn(output_path, style="word")
 
     return output_path
+
+
+def _build_social_raw_cmd(
+    video_path: Path, clip: ViralClip, output_path: Path,
+) -> list[str]:
+    """Time-trim the source preserving original aspect ratio.
+
+    The editorial layout (speaker_bottom_ai_top) defers framing to a
+    post-cut face-aware step; pre-cropping here would discard the horizontal
+    context needed to centre on a single speaker or zoom out for two.
+    """
+    start = max(0.0, clip.start_time - PADDING)
+    end = clip.end_time + PADDING
+    duration = end - start
+    return [
+        "ffmpeg",
+        "-ss", str(start),
+        "-i", str(video_path),
+        "-t", str(duration),
+        "-c:v", "libx264",
+        "-c:a", "aac",
+        "-y",
+        str(output_path),
+    ]
 
 
 def _build_youtube_cmd(video_path: Path, clip: ViralClip, output_path: Path) -> list[str]:

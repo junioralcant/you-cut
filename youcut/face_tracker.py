@@ -299,6 +299,325 @@ def detect_dominant_face_y_norm(
 # Public entry point (stub — rendering added in Task 4.0)
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Face-aware framing for editorial social layout (bottom panel)
+# ---------------------------------------------------------------------------
+
+# Faces with bbox dimension below this many pixels are dropped as likely
+# false positives (background heads, watermarks, posters).
+_MIN_FACE_DIM_PX = 40
+
+# Padding applied around the aggregate bounding box of all valid faces.
+# Vertical is larger than horizontal so the framing keeps headroom above hair.
+_FRAMING_HORIZONTAL_PADDING = 0.30
+_FRAMING_VERTICAL_PADDING = 0.55
+
+# Cluster face centres into horizontal bins of this width (pixels) when
+# aggregating across the clip. Bins capture distinct speaker positions.
+_CLUSTER_BIN_PX = 50
+
+# A cluster (bin) is kept only if it holds at least this fraction of the total
+# detections. Drops transient false positives (posters, someone walking by)
+# without dropping a real but less-detected speaker — unlike a global
+# percentile clip, this is robust to detection imbalance between speakers.
+_CLUSTER_MIN_FRACTION = 0.03
+
+
+def _compute_panel_crop_for_faces(
+    faces: list[_BBox],
+    *,
+    frame_w: int,
+    frame_h: int,
+    target_w: int,
+    target_h: int,
+) -> CropRegion:
+    """Compute a crop with target_w:target_h aspect ratio that contains all
+    *faces* (with padding) and is centred on their union bounding box.
+
+    Falls back to a centred crop when *faces* is empty.
+    """
+    target_ratio = target_w / target_h
+
+    if not faces:
+        if frame_w / frame_h >= target_ratio:
+            crop_h = frame_h
+            crop_w = int(round(crop_h * target_ratio))
+        else:
+            crop_w = frame_w
+            crop_h = int(round(crop_w / target_ratio))
+        x = max(0, (frame_w - crop_w) // 2)
+        y = max(0, (frame_h - crop_h) // 2)
+        return CropRegion(x=x, y=y, w=max(1, crop_w), h=max(1, crop_h))
+
+    x_min = min(f.x for f in faces)
+    y_min = min(f.y for f in faces)
+    x_max = max(f.x + f.w for f in faces)
+    y_max = max(f.y + f.h for f in faces)
+    union_w = max(1, x_max - x_min)
+    union_h = max(1, y_max - y_min)
+
+    pad_x = int(union_w * _FRAMING_HORIZONTAL_PADDING)
+    pad_y = int(union_h * _FRAMING_VERTICAL_PADDING)
+    desired_w = union_w + 2 * pad_x
+    desired_h = union_h + 2 * pad_y
+
+    desired_ratio = desired_w / desired_h
+    if desired_ratio < target_ratio:
+        desired_w = int(round(desired_h * target_ratio))
+    else:
+        desired_h = int(round(desired_w / target_ratio))
+
+    if desired_w > frame_w:
+        desired_w = frame_w
+        desired_h = int(round(desired_w / target_ratio))
+    if desired_h > frame_h:
+        desired_h = frame_h
+        desired_w = int(round(desired_h * target_ratio))
+
+    cx = (x_min + x_max) // 2
+    cy = (y_min + y_max) // 2
+    x = max(0, min(cx - desired_w // 2, frame_w - desired_w))
+    y = max(0, min(cy - desired_h // 2, frame_h - desired_h))
+
+    return CropRegion(x=x, y=y, w=max(1, desired_w), h=max(1, desired_h))
+
+
+def _ffmpeg_center_crop(
+    src: Path, dst: Path, *, target_w: int, target_h: int,
+) -> Path:
+    """Re-encode *src* into *dst* using a static centred crop at target dims."""
+    import subprocess
+
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", str(src),
+        "-vf", f"scale={target_w}:{target_h}:force_original_aspect_ratio=increase,crop={target_w}:{target_h}",
+        "-c:v", "libx264",
+        "-c:a", "aac",
+        str(dst),
+    ]
+    subprocess.run(cmd, check=True, capture_output=True)
+    return dst
+
+
+def frame_for_panel(
+    clip_path: Path,
+    *,
+    target_w: int,
+    target_h: int,
+    config: PipelineConfig,
+) -> Path:
+    """Re-frame *clip_path* into a target_w×target_h video using face-aware crop.
+
+    Tries speaker-aware scene cuts first (lip-movement-based, in
+    ``youcut.speaker_framing``); falls back to a single static aggregate
+    crop, then to a centred re-encode if no faces are found or any
+    dependency is missing.
+    """
+    output_path = clip_path.with_name(clip_path.stem + "_framed.mp4")
+    try:
+        import cv2  # type: ignore[import]  # noqa: F401
+    except ImportError as exc:
+        logger.info("Face framing: OpenCV ausente (%s) — center crop", exc)
+        return _ffmpeg_center_crop(clip_path, output_path, target_w=target_w, target_h=target_h)
+
+    try:
+        from youcut.speaker_framing import frame_with_speaker_scenes
+        scene_result = frame_with_speaker_scenes(
+            clip_path, output_path,
+            target_w=target_w, target_h=target_h, config=config,
+        )
+        if scene_result is not None:
+            return scene_result
+    except Exception as exc:
+        logger.warning("Speaker framing falhou (%s) — usando crop estático", exc)
+
+    try:
+        region = _analyze_clip_for_static_crop(
+            clip_path,
+            target_w=target_w,
+            target_h=target_h,
+            config=config,
+        )
+    except Exception as exc:
+        logger.warning("Face framing: análise falhou (%s) — center crop", exc)
+        return _ffmpeg_center_crop(clip_path, output_path, target_w=target_w, target_h=target_h)
+
+    if region is None:
+        logger.info(
+            "Face framing: nenhum rosto consistente em %s — center crop",
+            clip_path.name,
+        )
+        return _ffmpeg_center_crop(
+            clip_path, output_path, target_w=target_w, target_h=target_h,
+        )
+
+    try:
+        return _ffmpeg_static_crop(
+            clip_path, output_path,
+            region=region, target_w=target_w, target_h=target_h,
+        )
+    except Exception as exc:
+        logger.warning("Face framing: render estático falhou (%s) — center crop", exc)
+        return _ffmpeg_center_crop(clip_path, output_path, target_w=target_w, target_h=target_h)
+
+
+def _analyze_clip_for_static_crop(
+    clip_path: Path,
+    *,
+    target_w: int,
+    target_h: int,
+    config: PipelineConfig,
+) -> CropRegion | None:
+    """Scan *clip_path* and return a single CropRegion that contains the faces
+    seen across the whole clip, or ``None`` when no faces are detected.
+
+    Uses 5th/95th percentile of detection coordinates to be robust to a small
+    number of spurious detections.
+    """
+    import cv2  # type: ignore[import]
+    import time
+
+    cap = cv2.VideoCapture(str(clip_path))
+    if not cap.isOpened():
+        raise RuntimeError(f"Não foi possível abrir o vídeo: {clip_path}")
+
+    frame_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    frame_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    if frame_w <= 0 or frame_h <= 0:
+        cap.release()
+        raise RuntimeError(f"Dimensões inválidas para {clip_path}: {frame_w}x{frame_h}")
+
+    detector = None
+    try:
+        detector = _make_face_detector(config.face_detection_confidence)
+        use_mediapipe = True
+    except Exception as exc:
+        logger.info("Face framing: MediaPipe indisponível (%s) — usando OpenCV", exc)
+        use_mediapipe = False
+
+    t0 = time.time()
+    all_faces: list[_BBox] = []
+    frames_with_faces = 0
+    total_frames = 0
+    while True:
+        ok, frame = cap.read()
+        if not ok:
+            break
+        if use_mediapipe and detector is not None:
+            try:
+                faces = _detect_faces_in_frame(frame, detector)
+            except Exception:
+                faces = _detect_faces_with_opencv(frame)
+        else:
+            faces = _detect_faces_with_opencv(frame)
+
+        valid = [f for f in faces if f.w >= _MIN_FACE_DIM_PX and f.h >= _MIN_FACE_DIM_PX]
+        if valid:
+            all_faces.extend(valid)
+            frames_with_faces += 1
+        total_frames += 1
+
+    cap.release()
+    if detector is not None:
+        try:
+            detector.close()
+        except Exception:
+            pass
+
+    if not all_faces:
+        return None
+
+    aggregate = _aggregate_face_bbox(all_faces)
+    if aggregate is None:
+        return None
+
+    region = _compute_panel_crop_for_faces(
+        [aggregate],
+        frame_w=frame_w, frame_h=frame_h,
+        target_w=target_w, target_h=target_h,
+    )
+
+    elapsed = time.time() - t0
+    logger.info(
+        "Face framing: análise em %.1fs — %d detecções em %d/%d frames; "
+        "bbox agregada %dx%d em (%d,%d) → crop %dx%d em (%d,%d)",
+        elapsed, len(all_faces), frames_with_faces, total_frames,
+        aggregate.w, aggregate.h, aggregate.x, aggregate.y,
+        region.w, region.h, region.x, region.y,
+    )
+    return region
+
+
+def _aggregate_face_bbox(faces: list[_BBox]) -> _BBox | None:
+    """Return a bbox covering all *consistent* face clusters.
+
+    Bins faces by horizontal centre and keeps only bins that hold at least
+    ``_CLUSTER_MIN_FRACTION`` of detections. The bbox is then the min/max over
+    every face in every accepted cluster — so a speaker who looks down or
+    away half the time still stays in the frame, while a poster on the wall
+    detected for 10 frames does not.
+    """
+    if not faces:
+        return None
+
+    bins: dict[int, list[_BBox]] = {}
+    for f in faces:
+        cx = f.x + f.w // 2
+        bin_idx = cx // _CLUSTER_BIN_PX
+        bins.setdefault(bin_idx, []).append(f)
+
+    threshold = max(1, int(len(faces) * _CLUSTER_MIN_FRACTION))
+    accepted: list[_BBox] = []
+    for bucket in bins.values():
+        if len(bucket) >= threshold:
+            accepted.extend(bucket)
+
+    if not accepted:
+        accepted = faces
+
+    x_min = min(f.x for f in accepted)
+    y_min = min(f.y for f in accepted)
+    x_max = max(f.x + f.w for f in accepted)
+    y_max = max(f.y + f.h for f in accepted)
+
+    if x_max <= x_min or y_max <= y_min:
+        return None
+
+    return _BBox(x=x_min, y=y_min, w=x_max - x_min, h=y_max - y_min)
+
+
+def _ffmpeg_static_crop(
+    src: Path,
+    dst: Path,
+    *,
+    region: CropRegion,
+    target_w: int,
+    target_h: int,
+) -> Path:
+    """Render *src* into *dst* applying a single static crop+scale via ffmpeg."""
+    import subprocess
+
+    vf = (
+        f"crop={region.w}:{region.h}:{region.x}:{region.y},"
+        f"scale={target_w}:{target_h}"
+    )
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", str(src),
+        "-vf", vf,
+        "-c:v", "libx264",
+        "-c:a", "aac",
+        str(dst),
+    ]
+    subprocess.run(cmd, check=True, capture_output=True)
+    return dst
+
+
+# ---------------------------------------------------------------------------
+# Public entry point (legacy split-screen pipeline)
+# ---------------------------------------------------------------------------
+
 def apply_face_tracking(clip_path: Path, config: PipelineConfig) -> Path:
     """Apply face tracking to *clip_path* and return the processed clip path.
 

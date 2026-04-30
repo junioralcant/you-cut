@@ -3,8 +3,10 @@ import pytest
 
 from youcut.face_tracker import (
     _BBox,
+    _aggregate_face_bbox,
     _assign_speakers_to_faces,
     _build_split_screen_regions,
+    _compute_panel_crop_for_faces,
     _compute_single_speaker_roi,
     _smooth_regions,
 )
@@ -721,3 +723,201 @@ class TestRunFaceTrackingSplitScreen:
         call_result = mock_render.call_args[0][1]  # FaceTrackingResult
         assert any(call_result.is_split_screen)
         assert result == expected_output
+
+
+# ---------------------------------------------------------------------------
+# _compute_panel_crop_for_faces (face-aware framing for editorial layout)
+# ---------------------------------------------------------------------------
+
+class TestComputePanelCropForFaces:
+    """Crop derivation for the speaker_bottom_ai_top bottom panel.
+
+    Source frames are 1920×1080 (16:9 wide). Target panel is 1080×880 (taller
+    than wide, matches the editorial layout's bottom band).
+    """
+
+    FRAME_W = 1920
+    FRAME_H = 1080
+    TARGET_W = 1080
+    TARGET_H = 880
+    TARGET_RATIO = 1080 / 880
+
+    def _ratio(self, region):
+        return region.w / region.h
+
+    def test_empty_faces_returns_centred_crop_with_target_ratio(self):
+        region = _compute_panel_crop_for_faces(
+            [],
+            frame_w=self.FRAME_W, frame_h=self.FRAME_H,
+            target_w=self.TARGET_W, target_h=self.TARGET_H,
+        )
+        assert region.x >= 0 and region.y >= 0
+        assert region.x + region.w <= self.FRAME_W
+        assert region.y + region.h <= self.FRAME_H
+        assert abs(self._ratio(region) - self.TARGET_RATIO) < 0.05
+        cx = region.x + region.w // 2
+        assert abs(cx - self.FRAME_W // 2) <= 2
+
+    def test_single_face_off_centre_horizontal_centres_on_face(self):
+        face = _BBox(x=300, y=400, w=200, h=200)
+        face_cx = face.x + face.w // 2
+        region = _compute_panel_crop_for_faces(
+            [face],
+            frame_w=self.FRAME_W, frame_h=self.FRAME_H,
+            target_w=self.TARGET_W, target_h=self.TARGET_H,
+        )
+        crop_cx = region.x + region.w // 2
+        assert abs(crop_cx - face_cx) <= 2, (
+            f"Expected crop centred on face cx={face_cx}, got crop cx={crop_cx}"
+        )
+        assert region.x >= 0 and region.x + region.w <= self.FRAME_W
+
+    def test_single_face_on_right_side_centres_on_face(self):
+        face = _BBox(x=1500, y=400, w=200, h=200)
+        face_cx = face.x + face.w // 2
+        region = _compute_panel_crop_for_faces(
+            [face],
+            frame_w=self.FRAME_W, frame_h=self.FRAME_H,
+            target_w=self.TARGET_W, target_h=self.TARGET_H,
+        )
+        crop_cx = region.x + region.w // 2
+        # When a face is near the edge, the crop is clamped to frame bounds —
+        # but the face must still be inside the crop (not lost like before).
+        assert region.x <= face.x and (region.x + region.w) >= (face.x + face.w)
+        # And the crop should pull as far right as it can to keep the face centred
+        assert crop_cx > self.FRAME_W // 2
+
+    def test_two_faces_realistic_layout_crop_contains_both(self):
+        # Two speakers in a typical interview framing (faces in the middle
+        # 60% of a 1920x1080 source). Both must fit inside the crop.
+        left = _BBox(x=600, y=400, w=180, h=180)
+        right = _BBox(x=1200, y=400, w=180, h=180)
+        region = _compute_panel_crop_for_faces(
+            [left, right],
+            frame_w=self.FRAME_W, frame_h=self.FRAME_H,
+            target_w=self.TARGET_W, target_h=self.TARGET_H,
+        )
+        assert region.x <= left.x
+        assert region.x + region.w >= right.x + right.w
+        assert region.y <= left.y
+        assert region.y + region.h >= left.y + left.h
+
+    def test_two_faces_at_extreme_edges_keeps_both_visible(self):
+        # When faces sit near opposite edges of a wide frame, the union may not
+        # fit at the panel's target ratio. The crop should still pull as wide
+        # as possible (clamped by the source frame) and stay centred on the
+        # mid-point so neither face gets clipped off-screen wholesale.
+        left = _BBox(x=300, y=400, w=180, h=180)
+        right = _BBox(x=1450, y=400, w=180, h=180)
+        region = _compute_panel_crop_for_faces(
+            [left, right],
+            frame_w=self.FRAME_W, frame_h=self.FRAME_H,
+            target_w=self.TARGET_W, target_h=self.TARGET_H,
+        )
+        max_panel_w = int(self.FRAME_H * self.TARGET_RATIO)
+        assert region.w >= max_panel_w - 2, (
+            f"Expected crop near max panel width {max_panel_w}, got {region.w}"
+        )
+        union_cx = (left.x + (right.x + right.w)) // 2
+        crop_cx = region.x + region.w // 2
+        assert abs(crop_cx - union_cx) <= 2
+
+    def test_two_faces_crop_wider_than_single_face_crop(self):
+        left = _BBox(x=600, y=400, w=180, h=180)
+        right = _BBox(x=1140, y=400, w=180, h=180)
+        single = _compute_panel_crop_for_faces(
+            [left],
+            frame_w=self.FRAME_W, frame_h=self.FRAME_H,
+            target_w=self.TARGET_W, target_h=self.TARGET_H,
+        )
+        both = _compute_panel_crop_for_faces(
+            [left, right],
+            frame_w=self.FRAME_W, frame_h=self.FRAME_H,
+            target_w=self.TARGET_W, target_h=self.TARGET_H,
+        )
+        assert both.w >= single.w, (
+            f"Two-face crop should zoom out (≥ single). single.w={single.w}, both.w={both.w}"
+        )
+
+    def test_crop_preserves_target_aspect_ratio(self):
+        face = _BBox(x=860, y=440, w=200, h=200)
+        region = _compute_panel_crop_for_faces(
+            [face],
+            frame_w=self.FRAME_W, frame_h=self.FRAME_H,
+            target_w=self.TARGET_W, target_h=self.TARGET_H,
+        )
+        assert abs(self._ratio(region) - self.TARGET_RATIO) < 0.05
+
+    def test_crop_never_exceeds_frame(self):
+        face = _BBox(x=10, y=10, w=self.FRAME_W - 20, h=self.FRAME_H - 20)
+        region = _compute_panel_crop_for_faces(
+            [face],
+            frame_w=self.FRAME_W, frame_h=self.FRAME_H,
+            target_w=self.TARGET_W, target_h=self.TARGET_H,
+        )
+        assert region.x >= 0
+        assert region.y >= 0
+        assert region.x + region.w <= self.FRAME_W
+        assert region.y + region.h <= self.FRAME_H
+
+
+# ---------------------------------------------------------------------------
+# _aggregate_face_bbox (percentile-based bbox over a clip's detections)
+# ---------------------------------------------------------------------------
+
+class TestAggregateFaceBbox:
+    def test_empty_returns_none(self):
+        assert _aggregate_face_bbox([]) is None
+
+    def test_single_face_returns_that_face(self):
+        face = _BBox(x=600, y=400, w=200, h=200)
+        bbox = _aggregate_face_bbox([face])
+        assert bbox is not None
+        assert bbox.x == face.x
+        assert bbox.y == face.y
+        assert bbox.x + bbox.w == face.x + face.w
+        assert bbox.y + bbox.h == face.y + face.h
+
+    def test_two_speakers_aggregate_spans_both(self):
+        # 100 detections per speaker, both consistent across frames
+        left_detections = [_BBox(x=600, y=400, w=180, h=180) for _ in range(100)]
+        right_detections = [_BBox(x=1200, y=400, w=180, h=180) for _ in range(100)]
+        bbox = _aggregate_face_bbox(left_detections + right_detections)
+        assert bbox is not None
+        assert bbox.x <= 600
+        assert bbox.x + bbox.w >= 1200 + 180
+
+    def test_outliers_rejected_by_clustering(self):
+        # 100 consistent detections + 3 spurious far-away ones (each in its own bin)
+        consistent = [_BBox(x=900, y=400, w=180, h=180) for _ in range(100)]
+        outliers = [
+            _BBox(x=50, y=50, w=60, h=60),
+            _BBox(x=1850, y=950, w=60, h=60),
+            _BBox(x=1700, y=900, w=60, h=60),
+        ]
+        bbox = _aggregate_face_bbox(consistent + outliers)
+        assert bbox is not None
+        # The bbox should stay close to the consistent cluster, not stretched to the outliers.
+        assert bbox.x >= 800, f"Aggregate dragged left by outliers: {bbox}"
+        assert bbox.x + bbox.w <= 1180, f"Aggregate dragged right by outliers: {bbox}"
+
+    def test_unbalanced_speakers_both_kept(self):
+        # Speaker A is detected 1400 times (looks at camera most of the clip),
+        # Speaker B only 90 times (looks down often). The previous percentile
+        # logic would clip B as an outlier; clustering keeps any bin with >=3%
+        # of detections, so B (~6%) survives.
+        a = [_BBox(x=500, y=400, w=180, h=180) for _ in range(1400)]
+        b = [_BBox(x=1300, y=400, w=180, h=180) for _ in range(90)]
+        bbox = _aggregate_face_bbox(a + b)
+        assert bbox is not None
+        assert bbox.x <= 500, f"Speaker A missing: {bbox}"
+        assert bbox.x + bbox.w >= 1300 + 180, f"Speaker B clipped out: {bbox}"
+
+    def test_extremely_rare_cluster_dropped(self):
+        # B appears in only 1% of frames — that's below the 3% threshold,
+        # treated as transient noise.
+        a = [_BBox(x=500, y=400, w=180, h=180) for _ in range(990)]
+        b = [_BBox(x=1300, y=400, w=180, h=180) for _ in range(10)]
+        bbox = _aggregate_face_bbox(a + b)
+        assert bbox is not None
+        assert bbox.x + bbox.w < 1300, f"Rare cluster should not stretch bbox: {bbox}"

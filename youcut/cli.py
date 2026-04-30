@@ -21,7 +21,7 @@ from youcut.analyzer import YOUTUBE_MIN_DURATION, analyze
 from youcut.caption_burner import CaptionBurner
 from youcut.captioner import add_captions
 from youcut.clipper import cut_clip
-from youcut.face_tracker import apply_face_tracking
+from youcut.face_tracker import apply_face_tracking, frame_for_panel
 from youcut.config import PipelineConfig
 from youcut.downloader import VideoDownloadError, download_video
 from youcut.exporter import export_metadata
@@ -873,8 +873,15 @@ def _finalize_editorial_social_clip(
 ) -> tuple[Path, bool, str | None]:
     composed_path = clip_path
     try:
-        logger.info("Social composer: generating top image for clip %s", clip_path.name)
-        composed_path = compose_social_clip(clip_path, clip, config)
+        band_h = config.social_layout_title_band_height if config.social_layout_title_enabled else 0
+        bottom_h = 1920 - config.social_layout_top_image_height - band_h
+        if bottom_h <= 0:
+            raise ValueError(f"bottom_h inválido: {bottom_h}")
+        framed_path = frame_for_panel(
+            clip_path, target_w=1080, target_h=bottom_h, config=config,
+        )
+        logger.info("Social composer: generating top image for clip %s", framed_path.name)
+        composed_path = compose_social_clip(framed_path, clip, config)
     except Exception as exc:
         logger.warning("Social composer falhou; usando clipe base %s: %s", clip_path.name, exc)
 

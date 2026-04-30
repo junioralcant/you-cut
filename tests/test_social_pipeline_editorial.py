@@ -68,12 +68,15 @@ def test_run_flow_c_composes_and_burns_bottom_panel(monkeypatch, tmp_path):
         patch("youcut.cli.transcribe", return_value=_make_transcription(raw_clip)),
         patch("youcut.cli.analyze", return_value=[clip]),
         patch("youcut.cli.cut_clip", return_value=raw_clip),
+        patch("youcut.cli.frame_for_panel", side_effect=lambda p, **_: p) as mock_frame,
         patch("youcut.cli.compose_social_clip", return_value=composed_clip) as mock_compose,
         patch("youcut.cli.CaptionBurner.burn", return_value=CaptionBurnResult(output_path=final_clip, captions_applied=True)) as mock_burn,
         patch("youcut.cli._show_records_table"),
     ):
         run_flow_c("https://youtube.com/watch?v=test", config, skip_review=True, upload=False)
 
+    mock_frame.assert_called_once()
+    assert mock_frame.call_args.args[0] == raw_clip
     mock_compose.assert_called_once_with(raw_clip, clip, config)
     assert mock_burn.call_args.kwargs["layout_mode"] == "bottom_panel"
 
@@ -110,6 +113,7 @@ def test_run_flow_b_composes_and_burns_bottom_panel(monkeypatch, tmp_path):
     with (
         patch("youcut.cli.analyze", return_value=[clip]),
         patch("youcut.cli.cut_clip", return_value=raw_clip),
+        patch("youcut.cli.frame_for_panel", side_effect=lambda p, **_: p),
         patch("youcut.cli.compose_social_clip", return_value=composed_clip) as mock_compose,
         patch("youcut.cli.CaptionBurner.burn", return_value=CaptionBurnResult(output_path=final_clip, captions_applied=True)) as mock_burn,
         patch("youcut.cli._show_records_table"),
