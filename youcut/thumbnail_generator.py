@@ -1305,9 +1305,15 @@ def _build_social_image_generation_prompt(
         "Absolutely no readable text anywhere in the image.",
         "If any source reference contains text, remove it or blur it until it becomes unreadable.",
         "Prefer a clear, vivid, high-contrast editorial look with immediate readability on small screens.",
+        # NO PEOPLE — context-only imagery to avoid fabricated/generic faces.
+        "STRICT NO-PEOPLE RULE: do not show any human figure, face, body, hand, silhouette, or person of any kind in this image — full body, partial body, background extras, crowd, or stylized human shapes are all forbidden.",
+        "Do not invent or imagine any politician, celebrity, generic stock model, or extra figure. The bottom panel of the final video already shows the real speaker, so this top image must stay people-free to avoid confusing the viewer.",
+        "Instead, build the visual narrative entirely from contextual elements: environments, places, landscapes, architecture, symbolic objects, props, textures, maps, abstract editorial graphics, atmospheric lighting, or thematic still-life compositions that match the topic of the clip.",
+        "The image should evoke the subject of the clip through context and atmosphere, not through any human likeness.",
+        "Use the provided reference frames only to capture the mood, lighting, environment, and theme of the original video — not to depict any person from those frames.",
         f"Main topic: {clip.title}.",
         f"Editorial hook: {clip.social_hook_title or clip.title}.",
-        f"Visual prompt: {clip.social_image_prompt or clip.thumbnail_idea}.",
+        f"Visual prompt (reinterpret as people-free contextual imagery): {clip.social_image_prompt or clip.thumbnail_idea}.",
         f"Visual style: {clip.social_visual_style or 'editorial claro e vivo, alto contraste'}."
     ]
     if clip.thumbnail_idea.strip():
