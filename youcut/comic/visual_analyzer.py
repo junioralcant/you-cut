@@ -10,6 +10,7 @@ from typing import Any
 
 import anthropic
 
+from youcut.comic.panel_renderer import sanitize_brand_mentions
 from youcut.config import PipelineConfig
 from youcut.models import (
     CastKind,
@@ -334,7 +335,9 @@ def _assemble_cast(
     used_ids: set[str] = set()
     for idx, raw in enumerate(raw_characters):
         kind: CastKind = raw.get("kind") or "person"  # type: ignore[assignment]
-        role = (raw.get("narrative_role") or kind).strip() or kind
+        role = sanitize_brand_mentions(
+            (raw.get("narrative_role") or kind).strip() or kind
+        )
         base_slug = _slugify(role)
         slug = base_slug
         n = 1
@@ -362,12 +365,16 @@ def _assemble_cast(
                 hair=(raw.get("hair") or "").strip(),
                 facial_hair=(raw.get("facial_hair") or "").strip(),
                 skin=(raw.get("skin") or "").strip(),
-                clothing=(raw.get("clothing") or "").strip(),
-                accessories=[a for a in (raw.get("accessories") or []) if a],
+                clothing=sanitize_brand_mentions((raw.get("clothing") or "").strip()),
+                accessories=[
+                    sanitize_brand_mentions(a)
+                    for a in (raw.get("accessories") or [])
+                    if a
+                ],
                 narrative_role=role,
                 speaker_id=speaker_id,
                 source_frame_path=source_frame_path,
-                text_card=_build_text_card(raw),
+                text_card=sanitize_brand_mentions(_build_text_card(raw)),
             )
         )
     return cast
@@ -375,7 +382,7 @@ def _assemble_cast(
 
 def _generic_fallback_cast(transcription: TranscriptionResult) -> list[CastMember]:
     snippet = _truncate_transcript(transcription, max_chars=200)
-    text_card = (
+    text_card = sanitize_brand_mentions(
         "personagem genérico inferido do áudio (nenhum rosto detectado nos frames). "
         f"Resumo: {snippet}"
     )

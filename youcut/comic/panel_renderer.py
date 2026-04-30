@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import subprocess
 from pathlib import Path
 from typing import Iterable
@@ -46,8 +47,48 @@ _STYLE_PROMPT = (
     "cabelo, barba, pele, roupa e acessórios devem ser claramente reconhecíveis "
     "e consistentes em todos os painéis. Paleta pastel dessaturada, fundo "
     "aquarela digital. Sem fotorrealismo, sem texto embutido, sem "
-    "marcas/logotipos/handles de terceiros."
+    "marcas/logotipos/handles de terceiros. PROIBIDO renderizar logos, ícones "
+    "ou marcas reconhecíveis de TikTok, Instagram, Reels, YouTube, Shorts, "
+    "Facebook, WhatsApp, Twitter, X, Snapchat ou Kwai — telas de celular e "
+    "computador devem mostrar APENAS conteúdo abstrato/cena ou ficar "
+    "desligadas/escuras, jamais marcas reconhecíveis."
 )
+
+
+# ---------------------------------------------------------------------------
+# Brand sanitization — defesa em profundidade contra logos renderizados
+# ---------------------------------------------------------------------------
+
+_BRAND_REPLACEMENTS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"\btik[\s-]*tok\b", re.IGNORECASE), "app de vídeo curto"),
+    (re.compile(r"\binstagram\b", re.IGNORECASE), "rede social"),
+    (re.compile(r"\binsta\b", re.IGNORECASE), "rede social"),
+    (re.compile(r"\breels?\b", re.IGNORECASE), "vídeo curto"),
+    (re.compile(r"\byou[\s-]*tube\b", re.IGNORECASE), "plataforma de vídeo"),
+    (re.compile(r"\bfacebook\b", re.IGNORECASE), "rede social"),
+    (re.compile(r"\bwhats[\s-]*app\b", re.IGNORECASE), "app de mensagens"),
+    (re.compile(r"\bsnap[\s-]*chat\b", re.IGNORECASE), "app de mensagens"),
+    (re.compile(r"\btwitter\b", re.IGNORECASE), "rede social"),
+    (re.compile(r"\bkwai\b", re.IGNORECASE), "app de vídeo curto"),
+)
+
+
+def sanitize_brand_mentions(text: str) -> str:
+    """Substitui menções a marcas de redes sociais por termos genéricos.
+
+    Defesa em profundidade: modelos de imagem tendem a ignorar instruções
+    negativas quando a marca aparece no prompt positivo (ex.: "smartphone
+    reagindo a vídeo do TikTok" → o modelo renderiza o logo do TikTok mesmo
+    com regra "sem logos"). Sanitizar antes do prompt impede que o nome da
+    marca chegue ao gerador de imagem.
+    """
+
+    if not text:
+        return text
+    out = text
+    for pattern, replacement in _BRAND_REPLACEMENTS:
+        out = pattern.sub(replacement, out)
+    return out
 
 _I2V_MOTION_PROMPT = (
     "Movimento expressivo SINCRONIZADO com a fala fornecida: a animação de "
@@ -107,7 +148,8 @@ def _build_image_base_prompt(panel: Panel, cast: list[CastMember]) -> str:
         member = cast_by_id.get(char_id)
         if member is None:
             continue
-        descriptions.append(f"`{member.character_id}` ({member.text_card or member.narrative_role})")
+        member_desc = sanitize_brand_mentions(member.text_card or member.narrative_role)
+        descriptions.append(f"`{member.character_id}` ({member_desc})")
 
     cast_block = "; ".join(descriptions) or "personagens conforme cenário"
     framing_pt = {
@@ -117,10 +159,13 @@ def _build_image_base_prompt(panel: Panel, cast: list[CastMember]) -> str:
         "two_shot": "two-shot (dois personagens enquadrados juntos)",
     }.get(panel.framing, "plano médio")
 
+    safe_scene = sanitize_brand_mentions(panel.scene)
+    safe_pose = sanitize_brand_mentions(panel.pose_description)
+
     return (
         f"Painel ilustrado em proporção 9:16. Personagens em cena: {cast_block}. "
-        f"Cenário: {panel.scene}. Enquadramento: {framing_pt}. "
-        f"Pose/expressão dominante: {panel.pose_description}. "
+        f"Cenário: {safe_scene}. Enquadramento: {framing_pt}. "
+        f"Pose/expressão dominante: {safe_pose}. "
         f"{_STYLE_PROMPT} Apenas os personagens listados; sem multidão, sem "
         "marcas/logos/handles de terceiros, sem texto embutido."
     )

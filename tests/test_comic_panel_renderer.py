@@ -15,6 +15,7 @@ from youcut.comic.panel_renderer import (
     _split_speaking_vs_silent,
     render_all,
     render_panel,
+    sanitize_brand_mentions,
 )
 from youcut.comic.providers.i2v import I2VGenerationError
 from youcut.comic.providers.images import ImageGenerationError
@@ -99,6 +100,76 @@ def test_i2v_prompt_uses_expressive_motion():
     assert "PICO EMOCIONAL" in prompt
     assert "frame final" in prompt
     assert "sem mudanças de cenário" in prompt
+
+
+# ---------------------------------------------------------------------------
+# Brand sanitization
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "raw, must_not_contain",
+    [
+        ("smartphone reagindo a vídeo do TikTok", "TikTok"),
+        ("celular abrindo o Instagram", "Instagram"),
+        ("assistindo um Reels engraçado", "Reels"),
+        ("post no YouTube Shorts", "YouTube"),
+        ("mensagem no WhatsApp", "WhatsApp"),
+        ("cena no Tik Tok aberto", "Tik Tok"),
+        ("vídeo do Kwai", "Kwai"),
+        ("perfil do Snapchat", "Snapchat"),
+        ("tweet no Twitter", "Twitter"),
+        ("compartilhou no Facebook", "Facebook"),
+    ],
+)
+def test_sanitize_brand_mentions_strips_known_brands(raw, must_not_contain):
+    cleaned = sanitize_brand_mentions(raw)
+    assert must_not_contain.lower() not in cleaned.lower()
+
+
+def test_sanitize_brand_mentions_preserves_unrelated_text():
+    text = "homem com camiseta verde segurando bacia de buchada"
+    assert sanitize_brand_mentions(text) == text
+
+
+def test_sanitize_brand_mentions_handles_empty():
+    assert sanitize_brand_mentions("") == ""
+
+
+def test_image_base_prompt_sanitizes_panel_scene_and_pose(tmp_path):
+    cast = _make_cast(tmp_path)
+    panel = _make_panel(["person_1"]).model_copy(
+        update={
+            "scene": "smartphone com vídeo do TikTok aberto",
+            "pose_description": "rolando o feed do Instagram",
+        }
+    )
+    prompt = _build_image_base_prompt(panel, cast)
+
+    # contexto positivo (scene/pose) deve ter sido reescrito
+    assert "vídeo do TikTok" not in prompt
+    assert "feed do Instagram" not in prompt
+    assert "smartphone com vídeo do app de vídeo curto aberto" in prompt
+    assert "rolando o feed do rede social" in prompt
+
+
+def test_image_base_prompt_sanitizes_cast_text_card(tmp_path):
+    cast = _make_cast(tmp_path)
+    cast[0] = cast[0].model_copy(
+        update={"text_card": "homem segurando celular reagindo a vídeo do TikTok"}
+    )
+    panel = _make_panel(["person_1"])
+    prompt = _build_image_base_prompt(panel, cast)
+    assert "vídeo do TikTok" not in prompt
+    assert "vídeo do app de vídeo curto" in prompt
+
+
+def test_style_prompt_lists_explicit_forbidden_brands(tmp_path):
+    cast = _make_cast(tmp_path)
+    panel = _make_panel(["person_1"])
+    prompt = _build_image_base_prompt(panel, cast)
+    for brand in ("TikTok", "Instagram", "YouTube", "WhatsApp", "Kwai"):
+        assert brand in prompt, f"style prompt deve listar {brand} explicitamente"
 
 
 # ---------------------------------------------------------------------------
