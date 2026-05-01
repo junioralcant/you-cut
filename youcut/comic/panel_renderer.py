@@ -124,7 +124,13 @@ def _select_references(panel: Panel, cast: list[CastMember]) -> list[Path]:
     Quando o painel tem mais participantes do que o limite, prioriza:
       1. quem aparece primeiro em ``panel.participants`` (ordem do roteiro);
       2. somente personagens com ficha-âncora válida no disco.
+
+    Em painéis ``narrative_mode=True`` retorna ``[]`` — a cena visualiza
+    elementos fictícios inventados pela IA, sem fichas-âncora a respeitar.
     """
+
+    if panel.narrative_mode:
+        return []
 
     cast_by_id = {m.character_id: m for m in cast}
     refs: list[Path] = []
@@ -142,6 +148,30 @@ def _select_references(panel: Panel, cast: list[CastMember]) -> list[Path]:
 
 
 def _build_image_base_prompt(panel: Panel, cast: list[CastMember]) -> str:
+    framing_pt = {
+        "close": "close-up",
+        "medium": "plano médio",
+        "wide": "plano aberto",
+        "two_shot": "two-shot (dois personagens enquadrados juntos)",
+    }.get(panel.framing, "plano médio")
+
+    safe_scene = sanitize_brand_mentions(panel.scene)
+    safe_pose = sanitize_brand_mentions(panel.pose_description)
+
+    if panel.narrative_mode:
+        elements_block = "; ".join(
+            sanitize_brand_mentions(e) for e in panel.narrative_elements
+        ) or "elementos da cena conforme cenário"
+        return (
+            f"Painel ilustrado em proporção 9:16 — CENA NARRATIVA visualizando "
+            f"a história contada (sem o falante em quadro). Elementos da cena: "
+            f"{elements_block}. Cenário: {safe_scene}. Enquadramento: {framing_pt}. "
+            f"Ação/expressão dominante: {safe_pose}. ANTROPOMORFIZE objetos e "
+            f"animais com olhos grandes, boca expressiva e emoção visível. "
+            f"{_STYLE_PROMPT} Sem multidão, sem marcas/logos/handles de terceiros, "
+            "sem texto embutido."
+        )
+
     cast_by_id = {m.character_id: m for m in cast}
     descriptions: list[str] = []
     for char_id in panel.participants:
@@ -152,15 +182,6 @@ def _build_image_base_prompt(panel: Panel, cast: list[CastMember]) -> str:
         descriptions.append(f"`{member.character_id}` ({member_desc})")
 
     cast_block = "; ".join(descriptions) or "personagens conforme cenário"
-    framing_pt = {
-        "close": "close-up",
-        "medium": "plano médio",
-        "wide": "plano aberto",
-        "two_shot": "two-shot (dois personagens enquadrados juntos)",
-    }.get(panel.framing, "plano médio")
-
-    safe_scene = sanitize_brand_mentions(panel.scene)
-    safe_pose = sanitize_brand_mentions(panel.pose_description)
 
     return (
         f"Painel ilustrado em proporção 9:16. Personagens em cena: {cast_block}. "
@@ -312,6 +333,22 @@ def _build_i2v_prompt(
         if dialogue
         else " (Painel silencioso — manter movimento ambiente sutil.)"
     )
+
+    if panel.narrative_mode:
+        narrative_lipsync = (
+            " VOZ EM OFF (NARRATIVA): o áudio é narração externa; os "
+            "personagens/objetos visíveis NÃO falam — manter bocas fechadas "
+            "ou em expressão da cena (espanto, grito mudo, choro), SEM "
+            "articulação labial sincronizada com palavras. Animar a AÇÃO da "
+            "cena (movimento, queda, velocidade, reação corporal) coerente "
+            "com o tom do áudio."
+        )
+        return (
+            f"Cena narrativa fictícia: {panel.scene}. "
+            f"Ação dominante: {panel.pose_description}."
+            f"{dialogue_block}{narrative_lipsync} "
+            f"{_I2V_MOTION_PROMPT}"
+        )
 
     lipsync_block = ""
     if cast:

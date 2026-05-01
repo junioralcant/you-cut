@@ -160,6 +160,8 @@ class Panel(BaseModel):
     scene: str
     pose_description: str
     panel_seconds_target: float
+    narrative_mode: bool = False
+    narrative_elements: list[str] = []
 
     @field_validator("end_time")
     @classmethod

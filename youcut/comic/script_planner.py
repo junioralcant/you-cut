@@ -72,6 +72,27 @@ _PLAN_TOOL: dict[str, Any] = {
                         },
                         "scene": {"type": "string"},
                         "pose_description": {"type": "string"},
+                        "narrative_mode": {
+                            "type": "boolean",
+                            "description": (
+                                "true quando o painel visualiza a cena que está "
+                                "sendo NARRADA pelo falante (ex.: criança em "
+                                "montanha-russa) em vez de mostrar o falante. "
+                                "Quando true, `participants` deve ser [] e "
+                                "`narrative_elements` deve listar os elementos "
+                                "fictícios da cena."
+                            ),
+                        },
+                        "narrative_elements": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": (
+                                "Lista de personagens/objetos fictícios a inventar "
+                                "no painel narrativo. Apenas quando narrative_mode=true. "
+                                "Ex.: [\"criança chorona em carrinho\", \"montanha-russa "
+                                "amarela com olhos arregalados\", \"pai sorrindo no chão\"]."
+                            ),
+                        },
                     },
                     "required": [
                         "start_time",
@@ -116,8 +137,47 @@ def _audio_duration(transcription: TranscriptionResult) -> float:
     return float(transcription.segments[-1].end)
 
 
-def _build_system_prompt(audio_duration: float, min_p: float, max_p: float) -> str:
-    return (
+def _is_voiceover_mode(cast: list[CastMember]) -> bool:
+    """True quando NENHUM membro do cast está mapeado a um speaker.
+
+    Indica que o falante deve ser tratado como voz em off (nunca em quadro)
+    e os personagens disponíveis são reatores/audiência.
+    """
+
+    return bool(cast) and all((c.speaker_id is None) for c in cast)
+
+
+_VOICEOVER_BLOCK = (
+    "\n\nMODO VOZ EM OFF (ATIVADO — todo o cast é de REATORES, ninguém fala):\n"
+    "- O falante do áudio é VOZ EM OFF e NUNCA aparece em quadro. PROIBIDO "
+    "renderizar, descrever ou referenciar o falante visualmente em qualquer "
+    "painel.\n"
+    "- Painéis com `narrative_mode=false` mostram UM ou DOIS reatores do cast "
+    "(audiência) reagindo ao que está sendo dito naquele instante. Use close-up "
+    "ou plano médio. O `pose_description` deve descrever a REAÇÃO do reator "
+    "(expressão facial, sobrancelhas, boca, gesto) coerente com o tom do "
+    "trecho de fala daquele painel — NUNCA descreva o falante.\n"
+    "- ALTERNE entre os reatores ao longo do vídeo: cada reator tem um "
+    "arquétipo emocional diferente; escolha o reator cuja postura combina "
+    "melhor com cada trecho. Não use sempre o mesmo reator.\n"
+    "- Aumente o uso de `narrative_mode=true` para ~60-80% dos painéis, "
+    "intercalando com painéis de reator. O objetivo é ilustrar VISUALMENTE "
+    "o que a voz em off descreve, com reatores reagindo entre uma cena e "
+    "outra.\n"
+    "- Os reatores são MUDOS: o `pose_description` NÃO deve descrever lábios "
+    "articulando palavras nem fala. Apenas reação (espanto, deboche, riso, "
+    "indignação, tédio, concordância)."
+)
+
+
+def _build_system_prompt(
+    audio_duration: float,
+    min_p: float,
+    max_p: float,
+    *,
+    voiceover_mode: bool = False,
+) -> str:
+    base = (
         "Você é um roteirista visual de motion comics em pt-BR.\n"
         "Sua tarefa: dividir a transcrição em painéis ilustrados.\n\n"
         "REGRAS OBRIGATÓRIAS:\n"
@@ -137,7 +197,8 @@ def _build_system_prompt(audio_duration: float, min_p: float, max_p: float) -> s
         "explícita, usar cenário neutro coerente (ex.: \"interior neutro\", "
         "\"rua urbana neutra\").\n"
         "- `participants` deve conter pelo menos um id do cast fornecido. Use os ids "
-        "exatos como aparecem no cast.\n"
+        "exatos como aparecem no cast. EXCEÇÃO: painéis em modo narrativo (ver abaixo) "
+        "devem ter `participants=[]`.\n"
         "- O `pose_description` deve refletir o TOM EMOCIONAL do trecho falado: "
         "infira do conteúdo, da pontuação (exclamações, perguntas) e dos "
         "intensificadores qual é o estado emocional dominante e descreva pose, "
@@ -146,8 +207,39 @@ def _build_system_prompt(audio_duration: float, min_p: float, max_p: float) -> s
         "surpresa; \"sobrancelhas franzidas, lábios apertados, dedo apontado\" "
         "para indignação; \"sorriso aberto, ombros relaxados, mão gesticulando\" "
         "para empolgação. Evite descritores abstratos como \"emocionado\" sem "
-        "indicar a expressão correspondente."
+        "indicar a expressão correspondente.\n\n"
+        "PAINÉIS EM MODO NARRATIVO (`narrative_mode=true`):\n"
+        "- Quando a fala DESCREVE uma cena visualizável — uma história, um lugar, "
+        "uma situação com personagens fictícios, objetos animados, animais, etc. "
+        "(ex.: \"criança gritando na montanha-russa\", \"barata voando no quarto\", "
+        "\"montanha gigante com cara de raiva\") — você DEVE marcar esse painel como "
+        "`narrative_mode=true` e VISUALIZAR A CENA NARRADA, em vez de mostrar o "
+        "falante encenando.\n"
+        "- META: quando a transcrição for ricamente descritiva, use ~40-60% dos "
+        "painéis em modo narrativo, alternados com painéis do falante (não-narrativos). "
+        "Comece e termine com painéis do falante para ancorar; intercale narrativos "
+        "no miolo onde a história é contada.\n"
+        "- Em painéis narrativos:\n"
+        "    * `participants` = [] (vazio).\n"
+        "    * `narrative_elements` = lista de strings descrevendo CADA personagem/"
+        "objeto fictício a aparecer, com expressão e ação. ANTROPOMORFIZE objetos "
+        "(montanhas-russas, brinquedos, lagartas) com olhos, boca e expressões "
+        "emotivas. Ex.: [\"criança chorona com lágrimas voando, boca aberta em "
+        "berro\", \"montanha-russa amarela antropomorfizada com olhos esbugalhados "
+        "e dentes à mostra\", \"pai sorridente acenando do chão com cara de tédio\"].\n"
+        "    * `scene` = ambiente fictício curto (ex.: \"parque de diversões pastel "
+        "com nuvens\", \"quarto de criança com poster\").\n"
+        "    * `pose_description` = ação/expressão DOMINANTE da cena fictícia "
+        "(ex.: \"criança esticada para trás pela velocidade enquanto montanha-russa "
+        "ri maleficamente\").\n"
+        "    * `framing` = escolha o que melhor enquadra a cena (geralmente `wide` "
+        "ou `medium`).\n"
+        "- Não force narrativo: se o trecho é só \"então eu falei…\", \"sabe né?\", "
+        "comentário direto, mantenha o falante (`narrative_mode=false`)."
     )
+    if voiceover_mode:
+        base += _VOICEOVER_BLOCK
+    return base
 
 
 def _build_user_prompt(
@@ -339,15 +431,34 @@ def _validate_panels(
                 f"[{min_p:.1f}, {max_p:.1f}]s"
             )
 
+        narrative_mode = bool(raw.get("narrative_mode") or False)
+        narrative_elements = [
+            str(e).strip()
+            for e in (raw.get("narrative_elements") or [])
+            if str(e).strip()
+        ]
+
         participants = list(raw.get("participants") or [])
-        if not participants:
-            return [], f"painel {index}: participants vazio"
-        unknown = [p for p in participants if p not in cast_ids]
-        if unknown:
-            return [], (
-                f"painel {index}: ids desconhecidos {unknown}; use somente "
-                f"ids do cast: {sorted(cast_ids)}"
-            )
+        if narrative_mode:
+            if participants:
+                return [], (
+                    f"painel {index}: narrative_mode=true exige participants=[] "
+                    f"(recebido {participants})"
+                )
+            if not narrative_elements:
+                return [], (
+                    f"painel {index}: narrative_mode=true exige "
+                    f"narrative_elements não-vazio"
+                )
+        else:
+            if not participants:
+                return [], f"painel {index}: participants vazio"
+            unknown = [p for p in participants if p not in cast_ids]
+            if unknown:
+                return [], (
+                    f"painel {index}: ids desconhecidos {unknown}; use somente "
+                    f"ids do cast: {sorted(cast_ids)}"
+                )
 
         try:
             panel = Panel(
@@ -359,6 +470,8 @@ def _validate_panels(
                 scene=str(raw.get("scene", "") or "cenário neutro"),
                 pose_description=str(raw.get("pose_description", "") or "neutro"),
                 panel_seconds_target=duration,
+                narrative_mode=narrative_mode,
+                narrative_elements=narrative_elements,
             )
         except ValidationError as exc:
             return [], f"painel {index}: pydantic falhou: {exc.errors()[0]['msg']}"
@@ -410,6 +523,7 @@ def _call_claude(
         audio_dur,
         config.comic_panel_min_seconds,
         config.comic_panel_max_seconds,
+        voiceover_mode=_is_voiceover_mode(cast),
     )
     user_text = _build_user_prompt(transcription, cast, speakers, correction_hint)
 

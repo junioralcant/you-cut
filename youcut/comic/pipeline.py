@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Callable, Iterable
 
 from youcut.comic.cast_builder import build_cast
+from youcut.comic.cast_inventor import invent_cast
 from youcut.comic.composer import compose
 from youcut.comic.run_report import write_run_report
 from youcut.comic.cost_estimator import (
@@ -220,10 +221,14 @@ def run_comic_pipeline(
         )
         callbacks.on_stage("cast_reused", {"n": len(cast)})
     else:
-        callbacks.on_stage("visual_analyzer", {})
-        cast = detect_cast(
-            video_spec.path, transcription, speakers, config, output_dir=output_dir
-        )
+        if config.comic_invent_cast:
+            callbacks.on_stage("cast_invent", {})
+            cast = invent_cast(transcription, speakers, config)
+        else:
+            callbacks.on_stage("visual_analyzer", {})
+            cast = detect_cast(
+                video_spec.path, transcription, speakers, config, output_dir=output_dir
+            )
         cast_already_built = False
         if not callbacks.confirm_cast(cast):
             raise ComicPipelineError("Pipeline abortado pelo usuário durante revisão do cast.")

@@ -89,6 +89,8 @@ def _make_stage_logger(progress: bool):
             _console.print("[blue]» diarizando falantes…[/blue]")
         elif name == "visual_analyzer":
             _console.print("[blue]» detectando cast com Claude vision…[/blue]")
+        elif name == "cast_invent":
+            _console.print("[blue]» inventando cast a partir da transcrição…[/blue]")
         elif name == "cast_reused":
             _console.print(f"[green]✓ cast reaproveitado da sessão ({payload.get('n')} membros)[/green]")
         elif name == "script_planner":
@@ -162,6 +164,14 @@ def comic_command(
         "--no-progress",
         help="Suprime mensagens de progresso por etapa.",
     ),
+    invent_cast: bool = typer.Option(
+        False,
+        "--invent-cast",
+        help=(
+            "Inventa personagens fictícios a partir do áudio "
+            "(ignora frames do vídeo — não usa rosto real como referência)."
+        ),
+    ),
 ) -> None:
     """Gera um motion comic 9:16 a partir de um vídeo local (≤120s)."""
 
@@ -170,6 +180,8 @@ def comic_command(
         config_overrides["comic_max_panels"] = max_panels
     if cost_cap is not None:
         config_overrides["comic_cost_cap_usd"] = float(cost_cap)
+    if invent_cast:
+        config_overrides["comic_invent_cast"] = True
 
     try:
         config = PipelineConfig(**config_overrides)

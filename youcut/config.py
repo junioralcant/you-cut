@@ -61,6 +61,7 @@ class PipelineConfig(BaseSettings):
     comic_panel_max_seconds: float = 5.0
     comic_i2v_concurrency: int = 1
     comic_i2v_max_poll_seconds: float = 3600.0
+    comic_invent_cast: bool = False
 
     @model_validator(mode="after")
     def validate_api_key_present(self) -> "PipelineConfig":
