@@ -224,22 +224,46 @@ def _mux_audio(video_path: Path, audio_source: Path, out_path: Path) -> Path:
     return out_path
 
 
-def _burn_subtitles(video_path: Path, ass_path: Path, out_path: Path) -> Path:
+def _burn_subtitles(
+    video_path: Path,
+    ass_path: Path,
+    out_path: Path,
+    *,
+    output_width: int = OUTPUT_WIDTH,
+    output_height: int = OUTPUT_HEIGHT,
+) -> Path:
+    """Queima legendas e normaliza dimensões pra ``output_width × output_height``.
+
+    O filter chain faz scale + crop centralizado pra garantir que o vídeo
+    final fique exatamente em 9:16 (default 1080×1920) — compatível com
+    Reels/TikTok/Shorts. Vídeos com aspect-ratio diferente são preenchidos
+    cortando as bordas (sem letterbox preto), e o conteúdo central é
+    preservado.
+    """
+
     with tempfile.NamedTemporaryFile(
         suffix=".ass", delete=False, dir=tempfile.gettempdir()
     ) as safe_tmp:
         safe_path = Path(safe_tmp.name)
     safe_path.write_bytes(Path(ass_path).read_bytes())
     try:
+        scale_filter = (
+            f"scale={output_width}:{output_height}"
+            f":force_original_aspect_ratio=increase:flags=lanczos"
+        )
+        crop_filter = f"crop={output_width}:{output_height}"
+        ass_filter = f"ass={safe_path}"
         cmd = [
             "ffmpeg",
             "-y",
             "-i",
             str(video_path),
             "-vf",
-            f"ass={safe_path}",
+            f"{scale_filter},{crop_filter},{ass_filter}",
             "-c:v",
             "libx264",
+            "-pix_fmt",
+            "yuv420p",
             "-c:a",
             "copy",
             str(out_path),
@@ -301,14 +325,24 @@ def compose(
     _mux_audio(concat_path, video_path, muxed_path)
 
     # 4) Legendas palavra-a-palavra.
+    output_width = getattr(config, "comic_output_width", OUTPUT_WIDTH)
+    output_height = getattr(config, "comic_output_height", OUTPUT_HEIGHT)
     audio_duration = transcription.segments[-1].end if transcription.segments else 0.0
     words = _filter_words_in_range(transcription, 0.0, audio_duration + 1.0)
-    ass_doc = build_ass_for_words(words, output_size=(OUTPUT_WIDTH, OUTPUT_HEIGHT), offset=0.0)
+    ass_doc = build_ass_for_words(
+        words, output_size=(output_width, output_height), offset=0.0
+    )
     ass_path = work_dir / "captions.ass"
     ass_path.write_text(ass_doc, encoding="utf-8")
 
     final_path = output_dir / output_name
-    _burn_subtitles(muxed_path, ass_path, final_path)
+    _burn_subtitles(
+        muxed_path,
+        ass_path,
+        final_path,
+        output_width=output_width,
+        output_height=output_height,
+    )
 
     final_duration = _ffprobe_duration(final_path)
     if abs(final_duration - audio_duration) > DURATION_TOLERANCE_SECONDS:

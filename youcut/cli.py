@@ -1644,6 +1644,16 @@ def cuts(
     platforms_raw: str = typer.Option(
         "all", "--platforms", help="Plataformas de upload: youtube, instagram, tiktok ou all"
     ),
+    decoupage: bool = typer.Option(
+        False,
+        "--decoupage/--no-decoupage",
+        help="Remover silêncios/respirações dentro dos clipes (modo social).",
+    ),
+    color_preset: str = typer.Option(
+        "none",
+        "--filter",
+        help="Preset de cor para clipes social: none, warm, cool, vintage, punchy.",
+    ),
     log_level: str = typer.Option("INFO", "--log-level", help="Nível de log"),
     log_file: Optional[Path] = typer.Option(None, "--log-file", help="Arquivo de log"),
 ) -> None:
@@ -1707,11 +1717,29 @@ def cuts(
 
     try:
         selected_platforms = _parse_platforms(platforms_raw) if upload else list(_SUPPORTED_PLATFORMS)
+        # O preset de cor só faz sentido no layout clássico (o editorial é montado
+        # depois pelo social_composer). Se o usuário pediu --filter no modo social,
+        # desce para o classic e avisa.
+        layout_mode: Literal["classic", "speaker_bottom_ai_top"]
+        if mode == "social":
+            if color_preset != "none":
+                layout_mode = "classic"
+                _console.print(
+                    f"[yellow]--filter={color_preset} aplicado no layout 'classic' "
+                    f"(o layout editorial não suporta filtro de cor nesta versão).[/yellow]"
+                )
+            else:
+                layout_mode = "speaker_bottom_ai_top"
+        else:
+            layout_mode = "classic"
+
         config = PipelineConfig(
             cut_mode=mode,
             max_clips=resolved_max_clips,
             thumbnail_text=thumbnail_text_value,
-            social_layout_mode="speaker_bottom_ai_top" if mode == "social" else "classic",
+            social_layout_mode=layout_mode,
+            decoupage_enabled=decoupage,
+            social_filter_preset=color_preset,
         )
     except Exception as e:
         _err_console.print(Panel(str(e), title="[red]Erro de Configuração[/red]", border_style="red"))

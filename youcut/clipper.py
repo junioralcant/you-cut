@@ -4,7 +4,9 @@ import subprocess
 from pathlib import Path
 
 from youcut.caption_burner import CaptionBurner
+from youcut.color_filter import get_filter_chain
 from youcut.config import PipelineConfig
+from youcut.decoupage import remove_silences
 from youcut.models import CaptionBurnResult, ViralClip
 
 logger = logging.getLogger(__name__)
@@ -53,6 +55,20 @@ def cut_clip(
         stderr = e.stderr.decode("utf-8", errors="replace")
         logger.error("FFmpeg falhou (código %d): %s", e.returncode, stderr)
         raise
+
+    if config.decoupage_enabled and clip.cut_mode == "social":
+        try:
+            remove_silences(
+                output_path,
+                noise_db=config.decoupage_noise_db,
+                min_silence_gap=config.decoupage_min_silence_gap,
+                keep_padding=config.decoupage_keep_padding,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Decoupage falhou em %s: %s — mantendo clipe original.",
+                output_path.name, exc,
+            )
 
     if clip.cut_mode == "social" and config.social_layout_mode == "classic":
         output_path = CaptionBurner().burn(output_path, style="word")
@@ -111,13 +127,23 @@ def _build_social_cmd(
         )
     strategy = "blur_background" if use_blur else "fill_crop"
     logger.info("Estratégia de enquadramento vertical: %s", strategy)
+
+    color_chain = get_filter_chain(config.social_filter_preset)
+    color_suffix = f",{color_chain}" if color_chain else ""
+
     if use_blur:
+        filter_complex = (
+            _BLUR_BG_FILTER.replace(
+                "[bg][fg]overlay=(W-w)/2:(H-h)/2[v]",
+                f"[bg][fg]overlay=(W-w)/2:(H-h)/2{color_suffix}[v]",
+            )
+        )
         return [
             "ffmpeg",
             "-ss", str(start),
             "-i", str(video_path),
             "-t", str(duration),
-            "-filter_complex", _BLUR_BG_FILTER,
+            "-filter_complex", filter_complex,
             "-map", "[v]",
             "-map", "0:a",
             "-c:v", "libx264",
@@ -130,7 +156,7 @@ def _build_social_cmd(
         "-ss", str(start),
         "-i", str(video_path),
         "-t", str(duration),
-        "-vf", build_vertical_fill_filter(),
+        "-vf", build_vertical_fill_filter() + color_suffix,
         "-c:v", "libx264",
         "-c:a", "aac",
         "-y",

@@ -147,6 +147,102 @@ def _is_voiceover_mode(cast: list[CastMember]) -> bool:
     return bool(cast) and all((c.speaker_id is None) for c in cast)
 
 
+_DIALOGUE_MODE_BLOCK = (
+    "\n\nMODO DIÁLOGO (ATIVADO — formato cena única, personagens fixos "
+    "conversando entre si):\n"
+    "- TODO painel é NÃO-NARRATIVO (`narrative_mode=false`). Não invente "
+    "elementos fictícios fora do cast: os personagens que aparecem são "
+    "EXCLUSIVAMENTE os do cast fornecido.\n"
+    "- O áudio é DIÁLOGO entre os personagens do cast. Use a diarização "
+    "para identificar quem fala em cada janela de tempo. `participants` "
+    "deve incluir SEMPRE o falante ativo + ao menos um ouvinte (≥2 ids "
+    "do cast em todo painel).\n"
+    "- O `pose_description` deve descrever quem está falando "
+    "(\"<X> articula a frase com a boca aberta\") e quem está ouvindo "
+    "com qual expressão (\"<Y> escuta com sobrancelha franzida e olhar "
+    "irônico\"). Lip-sync é desejado para o falante; expressão reativa "
+    "para o ouvinte.\n"
+    "- ESTABILIDADE DE CENA: todos os painéis ocorrem no MESMO cenário-"
+    "base coerente com o tom do diálogo (ex.: bar, carro em movimento, "
+    "calçada, mesa de bar, escritório). Você pode variar o ENQUADRAMENTO "
+    "(close-up, two-shot, plano médio) para criar ritmo, mas o cenário "
+    "permanece o mesmo. Exceções pontuais permitidas em ≤20% dos "
+    "painéis para piadas visuais.\n"
+    "- USE PUNCHES DE CÂMERA: para cada beat cômico forte (frase em CAPS "
+    "do transcript, exclamações, repetição de pergunta com volume alto), "
+    "marque o painel correspondente com `framing=\"close\"` para criar "
+    "zoom-in dramático sobre o falante. Painéis de fala calma usam "
+    "`two_shot` ou `medium`.\n"
+    "- NUNCA use `narrative_mode=true` neste modo. NUNCA preencha "
+    "`narrative_elements`."
+)
+
+
+_FORCE_NARRATIVE_BLOCK = (
+    "\n\nMODO NARRATIVO TOTAL (ATIVADO — TODOS os painéis ilustram a história "
+    "narrada, ninguém aparece falando):\n"
+    "- 100% dos painéis DEVEM ter `narrative_mode=true`. PROIBIDO mostrar "
+    "qualquer membro do cast original em quadro. `participants` é SEMPRE "
+    "[] em todos os painéis.\n"
+    "- O áudio é narração em voz em off. A animação ENCENA visualmente o "
+    "que está sendo dito (\"show, don't tell\"): se a fala descreve uma "
+    "ação, um lugar, um conflito, uma metáfora — VISUALIZE essa cena com "
+    "personagens fictícios em ação.\n"
+    "- DESENVOLVA UMA HISTÓRIA com arco narrativo coerente do início ao "
+    "fim do áudio: defina UM(A) PROTAGONISTA recorrente (com descrição "
+    "visual fixa: tipo físico, roupa, traço característico) que aparece "
+    "em vários painéis. Coadjuvantes/antagonistas entram conforme a cena.\n"
+    "- Em cada `narrative_elements`, REPITA a descrição visual do "
+    "protagonista usando os mesmos termos sempre que ele aparecer. "
+    "Exemplo de protagonista consistente: \"jovem de cabelo cacheado "
+    "preto, camiseta vermelha lisa, calça jeans, tênis branco — postura "
+    "ágil\". Quando ele reaparecer em outro painel, copie EXATAMENTE essa "
+    "descrição (mesma roupa, mesmo cabelo) e só varie a ação/expressão.\n"
+    "- ANTROPOMORFIZE objetos/conceitos abstratos quando a fala usa "
+    "metáforas (ex.: \"malandragem\" pode virar uma figura humanoide com "
+    "chapéu inclinado e sorriso sagaz; \"dança\" pode ganhar pés e ritmo).\n"
+    "- O protagonista pode \"dublar\" a fala em painéis pontuais (≤20% "
+    "dos painéis) quando a frase é uma sentença curta de impacto que "
+    "ele DIZ no quadro — nesse caso, descreva no `pose_description` "
+    "que ele articula a frase. Em todos os outros painéis, mantenha "
+    "lábios fechados ou em expressão muda — a voz é off.\n"
+    "- `scene` deve descrever um cenário fictício rico e variado entre "
+    "painéis (ruas, interiores, paisagens), coerente com o arco da "
+    "história, evitando repetir o mesmo cenário em painéis seguidos.\n"
+    "- `framing` varia entre `wide`, `medium`, `close` e `two_shot` "
+    "para criar ritmo cinematográfico.\n"
+    "- `narrative_elements` deve ter ≥2 entradas em todos os painéis "
+    "(protagonista + ao menos um interagente — pessoa, animal, objeto "
+    "antropomorfizado)."
+)
+
+
+_MULTI_PARTICIPANT_BLOCK = (
+    "\n\nMODO MULTI-PARTICIPANTE (ATIVADO — toda cena tem ≥2 personagens "
+    "interagindo):\n"
+    "- TODO painel não-narrativo (`narrative_mode=false`) DEVE ter "
+    "`participants` com PELO MENOS 2 ids do cast — uma cena nunca mostra "
+    "uma pessoa sozinha. Use os personagens detectados no vídeo como "
+    "âncora e, se o cast tiver só 1 pessoa, repita o mesmo id duas vezes "
+    "NÃO é aceitável: prefira combinar com outros membros do cast (animal/"
+    "objeto/segundo personagem) que existam.\n"
+    "- O `pose_description` deve descrever INTERAÇÃO MÚTUA: o que cada "
+    "personagem faz em relação ao outro (ex.: \"o senhor de chapéu palha "
+    "aponta o dedo para o senhor de chapéu marrom, que ergue as "
+    "sobrancelhas em descrença\"). Não basta listar gestos paralelos — "
+    "precisa haver troca, reação ou imitação coordenada entre eles.\n"
+    "- Os personagens reagem ao áudio: imitam o gesto/ritmo da fala, "
+    "respondem com expressões coerentes ao tom (espanto, deboche, riso, "
+    "reprovação) ou \"encenam\" a frase juntos (um fala, o outro reage).\n"
+    "- Em painéis narrativos (`narrative_mode=true`), `narrative_elements` "
+    "deve listar ≥2 personagens/objetos fictícios também interagindo "
+    "entre si.\n"
+    "- `framing` preferido nesses painéis: `two_shot` ou `medium` para "
+    "caber os dois em quadro; use `close` apenas quando enquadrar AMBOS "
+    "em close-up justaposto."
+)
+
+
 _VOICEOVER_BLOCK = (
     "\n\nMODO VOZ EM OFF (ATIVADO — todo o cast é de REATORES, ninguém fala):\n"
     "- O falante do áudio é VOZ EM OFF e NUNCA aparece em quadro. PROIBIDO "
@@ -176,6 +272,9 @@ def _build_system_prompt(
     max_p: float,
     *,
     voiceover_mode: bool = False,
+    enforce_multi_participant: bool = False,
+    force_narrative_mode: bool = False,
+    dialogue_mode: bool = False,
 ) -> str:
     base = (
         "Você é um roteirista visual de motion comics em pt-BR.\n"
@@ -237,8 +336,18 @@ def _build_system_prompt(
         "- Não force narrativo: se o trecho é só \"então eu falei…\", \"sabe né?\", "
         "comentário direto, mantenha o falante (`narrative_mode=false`)."
     )
-    if voiceover_mode:
-        base += _VOICEOVER_BLOCK
+    # dialogue_mode é incompatível com voiceover/force_narrative — o usuário
+    # quer personagens falando entre si, então suprime os blocos que afastariam
+    # disso, e adiciona o block próprio.
+    if dialogue_mode:
+        base += _DIALOGUE_MODE_BLOCK
+    else:
+        if voiceover_mode:
+            base += _VOICEOVER_BLOCK
+        if force_narrative_mode:
+            base += _FORCE_NARRATIVE_BLOCK
+    if enforce_multi_participant:
+        base += _MULTI_PARTICIPANT_BLOCK
     return base
 
 
@@ -247,6 +356,8 @@ def _build_user_prompt(
     cast: list[CastMember],
     speakers: list[SpeakerSegment],
     correction_hint: str | None = None,
+    *,
+    scene_seed: str | None = None,
 ) -> str:
     audio_dur = _audio_duration(transcription)
     head = (
@@ -255,6 +366,15 @@ def _build_user_prompt(
         f"Diarização:\n{_format_speakers(speakers)}\n\n"
         f"Transcrição (timestamps em segundos):\n{_format_transcription(transcription)}"
     )
+    if scene_seed:
+        head += (
+            "\n\nCENÁRIO PRÉ-DEFINIDO (OBRIGATÓRIO): o campo `scene` de TODOS "
+            f"os painéis DEVE ser exatamente: {scene_seed!r}. Não invente "
+            "outros cenários — todos os painéis ocorrem nesse mesmo lugar; "
+            "varie apenas `framing` e `pose_description` para criar ritmo. "
+            "O `pose_description` precisa fazer sentido nesse cenário "
+            "(ações coerentes com onde os personagens estão)."
+        )
     if correction_hint:
         head += (
             "\n\nA tentativa anterior violou as regras. Corrija o que segue: "
@@ -410,6 +530,9 @@ def _validate_panels(
     cast_ids: set[str],
     min_p: float,
     max_p: float,
+    enforce_multi_participant: bool = False,
+    force_narrative_mode: bool = False,
+    dialogue_mode: bool = False,
 ) -> tuple[list[Panel], str | None]:
     """Valida invariantes; retorna ``(panels, error_hint)`` — hint é ``None`` se OK."""
 
@@ -438,6 +561,17 @@ def _validate_panels(
             if str(e).strip()
         ]
 
+        if force_narrative_mode and not narrative_mode:
+            return [], (
+                f"painel {index}: modo narrativo total exige "
+                f"narrative_mode=true em todos os painéis"
+            )
+        if dialogue_mode and narrative_mode:
+            return [], (
+                f"painel {index}: modo diálogo proíbe narrative_mode=true "
+                f"(use participantes do cast falando entre si)"
+            )
+
         participants = list(raw.get("participants") or [])
         if narrative_mode:
             if participants:
@@ -459,6 +593,24 @@ def _validate_panels(
                     f"painel {index}: ids desconhecidos {unknown}; use somente "
                     f"ids do cast: {sorted(cast_ids)}"
                 )
+            if (
+                enforce_multi_participant
+                and len(cast_ids) >= 2
+                and len(set(participants)) < 2
+            ):
+                return [], (
+                    f"painel {index}: modo multi-participante exige ≥2 ids "
+                    f"distintos em participants (recebido {participants})"
+                )
+        if (
+            enforce_multi_participant
+            and narrative_mode
+            and len(narrative_elements) < 2
+        ):
+            return [], (
+                f"painel {index}: modo multi-participante exige ≥2 "
+                f"narrative_elements interagindo (recebido {narrative_elements})"
+            )
 
         try:
             panel = Panel(
@@ -524,8 +676,17 @@ def _call_claude(
         config.comic_panel_min_seconds,
         config.comic_panel_max_seconds,
         voiceover_mode=_is_voiceover_mode(cast),
+        enforce_multi_participant=config.comic_enforce_multi_participant,
+        force_narrative_mode=config.comic_force_narrative_mode,
+        dialogue_mode=config.comic_dialogue_mode,
     )
-    user_text = _build_user_prompt(transcription, cast, speakers, correction_hint)
+    user_text = _build_user_prompt(
+        transcription,
+        cast,
+        speakers,
+        correction_hint,
+        scene_seed=config.comic_scene_seed,
+    )
 
     try:
         response = client.with_options(timeout=120.0).messages.create(
@@ -594,6 +755,9 @@ def plan_panels(
             cast_ids=cast_ids,
             min_p=config.comic_panel_min_seconds,
             max_p=config.comic_panel_max_seconds,
+            enforce_multi_participant=config.comic_enforce_multi_participant,
+            force_narrative_mode=config.comic_force_narrative_mode,
+            dialogue_mode=config.comic_dialogue_mode,
         )
         if hint is None:
             logger.info(
@@ -608,6 +772,16 @@ def plan_panels(
                 max_panel=config.comic_panel_max_seconds,
                 audio_duration=audio_dur,
             )
+            if config.comic_scene_seed:
+                seed = config.comic_scene_seed
+                panels = [
+                    p.model_copy(update={"scene": seed}) for p in panels
+                ]
+                logger.info(
+                    "comic.script_planner: cenário forçado para %r em %d painéis",
+                    seed,
+                    len(panels),
+                )
             return panels
         logger.warning(
             "comic.script_planner: tentativa %d violou invariante (%s)",

@@ -210,32 +210,44 @@ class ReplicateImageToVideoProvider:
         # - URL string direta
         # - lista [url1, url2, ...]
         # - FileOutput (objeto com .read() e .url)
+        # Em SDK >=1.x, ``.read()`` pode devolver bytes vazios se o stream já
+        # foi consumido internamente; por isso preferimos ``.url`` quando
+        # disponível e só caímos em ``.read()`` como último recurso.
+        url = self._extract_url(output)
+        if url:
+            return self._download_bytes(url)
+
         if hasattr(output, "read") and callable(output.read):
             data = output.read()
             if isinstance(data, bytes) and data:
                 return data
 
-        url: str | None = None
+        raise I2VGenerationError(
+            f"Resposta inesperada do Replicate (URL ausente): {output!r}"
+        )
+
+    @staticmethod
+    def _extract_url(output: Any) -> str | None:
+        candidate: Any = None
         if isinstance(output, str):
-            url = output
+            candidate = output
         elif isinstance(output, list) and output:
             first = output[0]
-            url = str(first) if not hasattr(first, "url") else str(first.url)
+            candidate = getattr(first, "url", None) or first
         elif hasattr(output, "url"):
-            url = str(output.url)
-        else:
-            url = str(output) if output else None
-
-        if not url or not url.startswith(("http://", "https://")):
-            raise I2VGenerationError(
-                f"Resposta inesperada do Replicate (URL ausente): {output!r}"
-            )
-        return self._download_bytes(url)
+            candidate = output.url
+        if candidate is None:
+            return None
+        url = str(candidate).strip()
+        if not url.startswith(("http://", "https://")):
+            return None
+        return url
 
     @staticmethod
     def _download_bytes(url: str, timeout: float = 60.0) -> bytes:
         try:
-            with urllib.request.urlopen(url, timeout=timeout) as resp:
+            req = urllib.request.Request(url, headers={"User-Agent": "youcut/0.1"})
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
                 return resp.read()
         except Exception as exc:
             raise I2VGenerationError(

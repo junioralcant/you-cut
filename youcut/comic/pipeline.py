@@ -319,6 +319,31 @@ def run_comic_pipeline(
         config,
     )
 
+    # 8) Metadados editoriais por plataforma (TikTok, Reels, Shorts).
+    if config.comic_generate_metadata:
+        try:
+            callbacks.on_stage("metadata", {})
+            from youcut.comic.metadata_generator import (
+                MetadataGenerationError,
+                generate_metadata,
+                write_metadata_files,
+            )
+
+            metadata = generate_metadata(
+                transcription,
+                cast,
+                config,
+                scene_seed=config.comic_scene_seed,
+            )
+            json_path, txt_path = write_metadata_files(metadata, output_dir)
+            callbacks.on_stage(
+                "metadata_done",
+                {"json": str(json_path), "txt": str(txt_path)},
+            )
+        except MetadataGenerationError as exc:
+            logger.warning("comic.pipeline: falha ao gerar metadados (%s)", exc)
+            callbacks.on_stage("metadata_failed", {"error": str(exc)})
+
     total_cost = round(sum(r.cost_usd for r in panel_results), 4)
     session = MotionComicSession(
         session_id=session_id or _new_session_id(),

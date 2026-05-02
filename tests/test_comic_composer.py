@@ -299,3 +299,106 @@ def test_compose_raises_on_missing_panel_results(tmp_path, transcription, config
     results = [_make_panel_result(0, clip0, 3.0)]
     with pytest.raises(ComposerError, match=r"Faltam mini-clipes"):
         compose(panels, results, transcription, tmp_path / "v.mp4", tmp_path / "out", config)
+
+
+def _make_clip_at_size(
+    path: Path, *, duration: float, width: int, height: int, color: str = "blue"
+) -> Path:
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-f",
+        "lavfi",
+        "-i",
+        f"color=c={color}:size={width}x{height}:duration={duration}",
+        "-c:v",
+        "libx264",
+        "-pix_fmt",
+        "yuv420p",
+        "-r",
+        "30",
+        "-t",
+        f"{duration:.2f}",
+        str(path),
+    ]
+    subprocess.run(cmd, check=True, capture_output=True)
+    return path
+
+
+def _ffprobe_dimensions(video_path: Path) -> tuple[int, int]:
+    cmd = [
+        "ffprobe",
+        "-v",
+        "error",
+        "-select_streams",
+        "v:0",
+        "-show_entries",
+        "stream=width,height",
+        "-of",
+        "csv=p=0",
+        str(video_path),
+    ]
+    result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+    w, h = result.stdout.strip().split(",")
+    return int(w), int(h)
+
+
+@pytest.mark.integration
+def test_compose_normalizes_output_to_1080x1920_when_input_is_2_3(
+    tmp_path, transcription, config
+):
+    """Vídeos gerados em 2:3 (ex.: prunaai 768×1152) devem ser
+    normalizados pra 1080×1920 (9:16 padrão Reels/TikTok)."""
+    video = _make_video_with_audio(tmp_path / "input.mp4", duration=6.0)
+    panels = [_make_panel(0, 0.0, 3.0), _make_panel(1, 3.0, 6.0)]
+    # Clipes em 768×1152 (formato 2:3, simulando saída do prunaai)
+    clip0 = _make_clip_at_size(tmp_path / "c0.mp4", duration=3.0, width=768, height=1152)
+    clip1 = _make_clip_at_size(
+        tmp_path / "c1.mp4", duration=3.0, width=768, height=1152, color="green"
+    )
+    results = [_make_panel_result(0, clip0, 3.0), _make_panel_result(1, clip1, 3.0)]
+
+    final = compose(panels, results, transcription, video, tmp_path / "out", config)
+
+    assert final.exists()
+    width, height = _ffprobe_dimensions(final)
+    assert width == 1080
+    assert height == 1920
+
+
+@pytest.mark.integration
+def test_compose_passes_through_already_1080x1920_input(
+    tmp_path, transcription, config
+):
+    """Input já em 1080×1920 deve sair com mesmas dimensões (no-op de scale)."""
+    video = _make_video_with_audio(tmp_path / "input.mp4", duration=6.0)
+    panels = [_make_panel(0, 0.0, 3.0)]
+    clip = _make_clip_at_size(
+        tmp_path / "c0.mp4", duration=3.0, width=1080, height=1920
+    )
+    results = [_make_panel_result(0, clip, 3.0)]
+
+    final = compose(panels, results, transcription, video, tmp_path / "out", config)
+    width, height = _ffprobe_dimensions(final)
+    assert width == 1080
+    assert height == 1920
+
+
+@pytest.mark.integration
+def test_compose_respects_custom_output_dimensions(
+    tmp_path, transcription, config, monkeypatch
+):
+    """`comic_output_width/height` na config sobrescreve o default."""
+    monkeypatch.setattr(config, "comic_output_width", 720)
+    monkeypatch.setattr(config, "comic_output_height", 1280)
+    video = _make_video_with_audio(tmp_path / "input.mp4", duration=4.0)
+    panels = [_make_panel(0, 0.0, 4.0)]
+    clip = _make_clip_at_size(
+        tmp_path / "c0.mp4", duration=4.0, width=768, height=1152
+    )
+    results = [_make_panel_result(0, clip, 4.0)]
+
+    final = compose(panels, results, transcription, video, tmp_path / "out", config)
+    width, height = _ffprobe_dimensions(final)
+    assert width == 720
+    assert height == 1280

@@ -202,3 +202,21 @@ class MotionComicSession(BaseModel):
     panel_results: list[PanelRenderResult] = []
     total_cost_usd: float = 0.0
     output_path: Path | None = None
+
+
+class PlatformMetadata(BaseModel):
+    """Metadados editoriais formatados para uma plataforma específica."""
+
+    platform: str
+    title: str
+    description: str
+    hashtags: list[str] = []
+
+
+class ComicMetadata(BaseModel):
+    """Metadados multi-plataforma gerados ao final do `youcut comic`."""
+
+    summary: str = ""
+    tiktok: PlatformMetadata
+    instagram_reels: PlatformMetadata
+    youtube_shorts: PlatformMetadata

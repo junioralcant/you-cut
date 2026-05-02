@@ -46,6 +46,12 @@ class PipelineConfig(BaseSettings):
     social_layout_title_bg_color: str = "#F4C400"
     social_layout_title_text_color: str = "#111111"
 
+    decoupage_enabled: bool = False
+    decoupage_noise_db: float = -30.0
+    decoupage_min_silence_gap: float = 0.4
+    decoupage_keep_padding: float = 0.05
+    social_filter_preset: Literal["none", "warm", "cool", "vintage", "punchy"] = "none"
+
     runway_api_key: str | None = None
     fal_api_key: str | None = None
     replicate_api_token: str | None = None
@@ -62,6 +68,14 @@ class PipelineConfig(BaseSettings):
     comic_i2v_concurrency: int = 1
     comic_i2v_max_poll_seconds: float = 3600.0
     comic_invent_cast: bool = False
+    comic_enforce_multi_participant: bool = False
+    comic_force_narrative_mode: bool = False
+    comic_dialogue_mode: bool = False
+    comic_scene_seed: str | None = None
+    comic_composition_seed_image: Path | None = None
+    comic_output_width: int = 1080
+    comic_output_height: int = 1920
+    comic_generate_metadata: bool = True
 
     @model_validator(mode="after")
     def validate_api_key_present(self) -> "PipelineConfig":

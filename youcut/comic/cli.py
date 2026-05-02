@@ -111,6 +111,16 @@ def _make_stage_logger(progress: bool):
             )
         elif name == "compose":
             _console.print("[blue]» compondo vídeo final (FFmpeg)…[/blue]")
+        elif name == "metadata":
+            _console.print("[blue]» gerando metadados por plataforma…[/blue]")
+        elif name == "metadata_done":
+            _console.print(
+                f"[green]✓ metadados:[/green] {payload.get('txt')}"
+            )
+        elif name == "metadata_failed":
+            _console.print(
+                f"[yellow]AVISO: falha ao gerar metadados ({payload.get('error')})[/yellow]"
+            )
         elif name == "dry_run_done":
             _console.print(f"[green]✓ dry-run concluído:[/green] {payload.get('path')}")
         elif name == "done":
@@ -172,6 +182,60 @@ def comic_command(
             "(ignora frames do vídeo — não usa rosto real como referência)."
         ),
     ),
+    multi_participant: bool = typer.Option(
+        False,
+        "--multi-participant",
+        help=(
+            "Exige ≥2 personagens interagindo em todo painel não-narrativo "
+            "(e ≥2 narrative_elements em painéis narrativos)."
+        ),
+    ),
+    narrative_only: bool = typer.Option(
+        False,
+        "--narrative-only",
+        help=(
+            "Força narrative_mode=true em TODOS os painéis: a animação "
+            "encena visualmente o que o áudio narra (cenários e personagens "
+            "fictícios construídos), sem mostrar o falante. Ideal combinar "
+            "com --invent-cast."
+        ),
+    ),
+    dialogue_mode: bool = typer.Option(
+        False,
+        "--dialogue-mode",
+        help=(
+            "Modo diálogo (formato MOTO ANIMADA): cena única com personagens "
+            "fixos do cast conversando entre si, com punches de câmera nos "
+            "beats cômicos. Mutuamente exclusivo com --narrative-only."
+        ),
+    ),
+    scene: str | None = typer.Option(
+        None,
+        "--scene",
+        help=(
+            "Cenário fixo aplicado a TODOS os painéis (ex.: \"dois personagens "
+            "em uma motocicleta enferrujada atravessando um deserto pastel "
+            "com cactos\"). Sobrescreve o `scene` do script_planner."
+        ),
+    ),
+    composition_image: Path | None = typer.Option(
+        None,
+        "--composition-image",
+        help=(
+            "PNG/JPG da composição master da cena: define quem fica onde "
+            "(piloto/garupa), direção da moto, framing canônico. Será passada "
+            "como 1ª reference_image em todo painel não-narrativo (gpt-image-1 "
+            "com input_fidelity=high copia a composição) — fixa o layout."
+        ),
+    ),
+    no_metadata: bool = typer.Option(
+        False,
+        "--no-metadata",
+        help=(
+            "Desliga a geração automática de título/descrição/hashtags por "
+            "plataforma (TikTok, Reels, Shorts) ao final do pipeline."
+        ),
+    ),
 ) -> None:
     """Gera um motion comic 9:16 a partir de um vídeo local (≤120s)."""
 
@@ -182,6 +246,28 @@ def comic_command(
         config_overrides["comic_cost_cap_usd"] = float(cost_cap)
     if invent_cast:
         config_overrides["comic_invent_cast"] = True
+    if multi_participant:
+        config_overrides["comic_enforce_multi_participant"] = True
+    if narrative_only and dialogue_mode:
+        _err_console.print(
+            "[red]--narrative-only e --dialogue-mode são mutuamente exclusivos.[/red]"
+        )
+        raise typer.Exit(code=2)
+    if narrative_only:
+        config_overrides["comic_force_narrative_mode"] = True
+    if dialogue_mode:
+        config_overrides["comic_dialogue_mode"] = True
+    if scene:
+        config_overrides["comic_scene_seed"] = scene
+    if composition_image:
+        if not composition_image.exists():
+            _err_console.print(
+                f"[red]--composition-image não encontrada: {composition_image}[/red]"
+            )
+            raise typer.Exit(code=2)
+        config_overrides["comic_composition_seed_image"] = composition_image
+    if no_metadata:
+        config_overrides["comic_generate_metadata"] = False
 
     try:
         config = PipelineConfig(**config_overrides)

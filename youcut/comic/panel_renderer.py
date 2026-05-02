@@ -118,15 +118,24 @@ def _ensure_panels_dir(output_dir: Path) -> Path:
     return panels_dir
 
 
-def _select_references(panel: Panel, cast: list[CastMember]) -> list[Path]:
-    """Seleciona até ``MAX_REFERENCES_PER_PANEL`` fichas-âncora dos participantes.
+def _select_references(
+    panel: Panel,
+    cast: list[CastMember],
+    *,
+    composition_seed: Path | None = None,
+) -> list[Path]:
+    """Seleciona até ``MAX_REFERENCES_PER_PANEL`` fichas-âncora.
 
-    Quando o painel tem mais participantes do que o limite, prioriza:
-      1. quem aparece primeiro em ``panel.participants`` (ordem do roteiro);
-      2. somente personagens com ficha-âncora válida no disco.
+    Ordem de prioridade (de maior pra menor):
+      1. ``composition_seed`` (master da composição: define quem fica onde,
+         direção da moto, framing canônico) — quando fornecido, ocupa
+         o slot 0;
+      2. participantes do painel na ordem do roteiro;
+      3. saldo é preenchido com âncoras dos demais membros do cast — força
+         consistência visual entre painéis.
 
-    Em painéis ``narrative_mode=True`` retorna ``[]`` — a cena visualiza
-    elementos fictícios inventados pela IA, sem fichas-âncora a respeitar.
+    Em painéis ``narrative_mode=True`` retorna ``[]`` — fichas-âncora não
+    se aplicam (cena fictícia).
     """
 
     if panel.narrative_mode:
@@ -134,20 +143,52 @@ def _select_references(panel: Panel, cast: list[CastMember]) -> list[Path]:
 
     cast_by_id = {m.character_id: m for m in cast}
     refs: list[Path] = []
-    for char_id in panel.participants:
-        member = cast_by_id.get(char_id)
+    seen: set[str] = set()
+
+    if composition_seed is not None:
+        seed_path = Path(composition_seed)
+        if seed_path.exists():
+            refs.append(seed_path)
+
+    def _push(member_id: str) -> bool:
+        if member_id in seen:
+            return len(refs) >= MAX_REFERENCES_PER_PANEL
+        member = cast_by_id.get(member_id)
         if member is None or member.anchor_image_path is None:
-            continue
+            return False
         path = Path(member.anchor_image_path)
         if not path.exists():
-            continue
+            return False
         refs.append(path)
-        if len(refs) >= MAX_REFERENCES_PER_PANEL:
-            break
+        seen.add(member_id)
+        return len(refs) >= MAX_REFERENCES_PER_PANEL
+
+    if len(refs) < MAX_REFERENCES_PER_PANEL:
+        for char_id in panel.participants:
+            if _push(char_id):
+                return refs
+
+    if len(refs) < MAX_REFERENCES_PER_PANEL:
+        for member in cast:
+            if _push(member.character_id):
+                break
     return refs
 
 
-def _build_image_base_prompt(panel: Panel, cast: list[CastMember]) -> str:
+_NO_TEXT_RULE = (
+    "PROIBIDO incluir QUALQUER tipo de texto, letras, palavras, balões de "
+    "fala, legendas, números, símbolos tipográficos ou estampas com palavras "
+    "dentro da imagem. Camisetas, placas e objetos NÃO podem conter texto "
+    "legível. A imagem deve ser puramente visual."
+)
+
+
+def _build_image_base_prompt(
+    panel: Panel,
+    cast: list[CastMember],
+    *,
+    composition_seed: Path | None = None,
+) -> str:
     framing_pt = {
         "close": "close-up",
         "medium": "plano médio",
@@ -157,6 +198,19 @@ def _build_image_base_prompt(panel: Panel, cast: list[CastMember]) -> str:
 
     safe_scene = sanitize_brand_mentions(panel.scene)
     safe_pose = sanitize_brand_mentions(panel.pose_description)
+
+    composition_rule = ""
+    if composition_seed is not None:
+        composition_rule = (
+            " A 1ª imagem de referência fornecida é a COMPOSIÇÃO MASTER da cena: "
+            "respeite-a EXATAMENTE em posicionamento espacial dos personagens "
+            "(quem fica na frente, quem na garupa, lado pra onde olham, "
+            "direção da motocicleta), framing e perspectiva. As demais "
+            "referências são âncoras de design dos personagens — copie a "
+            "aparência (rosto, cabelo, barba, roupa, capacete, óculos) "
+            "respeitando-as. Varie APENAS a expressão facial e a pose dos "
+            "braços/mãos conforme indicado abaixo."
+        )
 
     if panel.narrative_mode:
         elements_block = "; ".join(
@@ -168,8 +222,8 @@ def _build_image_base_prompt(panel: Panel, cast: list[CastMember]) -> str:
             f"{elements_block}. Cenário: {safe_scene}. Enquadramento: {framing_pt}. "
             f"Ação/expressão dominante: {safe_pose}. ANTROPOMORFIZE objetos e "
             f"animais com olhos grandes, boca expressiva e emoção visível. "
-            f"{_STYLE_PROMPT} Sem multidão, sem marcas/logos/handles de terceiros, "
-            "sem texto embutido."
+            f"{_STYLE_PROMPT} Sem multidão, sem marcas/logos/handles de terceiros. "
+            f"{_NO_TEXT_RULE}"
         )
 
     cast_by_id = {m.character_id: m for m in cast}
@@ -186,9 +240,9 @@ def _build_image_base_prompt(panel: Panel, cast: list[CastMember]) -> str:
     return (
         f"Painel ilustrado em proporção 9:16. Personagens em cena: {cast_block}. "
         f"Cenário: {safe_scene}. Enquadramento: {framing_pt}. "
-        f"Pose/expressão dominante: {safe_pose}. "
+        f"Pose/expressão dominante: {safe_pose}.{composition_rule} "
         f"{_STYLE_PROMPT} Apenas os personagens listados; sem multidão, sem "
-        "marcas/logos/handles de terceiros, sem texto embutido."
+        f"marcas/logos/handles de terceiros. {_NO_TEXT_RULE}"
     )
 
 
@@ -390,9 +444,11 @@ def _render_image_base(
     cast: list[CastMember],
     image_provider: ImageProvider,
     image_path: Path,
+    *,
+    composition_seed: Path | None = None,
 ) -> int:
-    prompt = _build_image_base_prompt(panel, cast)
-    references = _select_references(panel, cast)
+    prompt = _build_image_base_prompt(panel, cast, composition_seed=composition_seed)
+    references = _select_references(panel, cast, composition_seed=composition_seed)
 
     try:
         png_bytes = image_provider.generate(
@@ -466,6 +522,7 @@ def _render_i2v_with_fallback(
     duration: float,
     transcription: TranscriptionResult | None = None,
     speakers: list[SpeakerSegment] | None = None,
+    composition_seed: Path | None = None,
 ) -> tuple[bool, int]:
     """Gera mini-clipe via i2v ou cai para fallback estático.
 
@@ -473,7 +530,7 @@ def _render_i2v_with_fallback(
     """
 
     prompt_text = _build_i2v_prompt(panel, transcription, cast=cast, speakers=speakers)
-    references = _select_references(panel, cast)
+    references = _select_references(panel, cast, composition_seed=composition_seed)
 
     try:
         video_bytes = i2v_provider.image_to_video(
@@ -544,7 +601,13 @@ def render_panel(
     image_path, clip_path = _panel_paths(panels_dir, panel.index)
     duration = _clamp_panel_seconds(panel, config)
 
-    image_attempts = _render_image_base(panel, cast, image_provider, image_path)
+    image_attempts = _render_image_base(
+        panel,
+        cast,
+        image_provider,
+        image_path,
+        composition_seed=config.comic_composition_seed_image,
+    )
     was_static, i2v_attempts = _render_i2v_with_fallback(
         panel,
         cast,
@@ -554,6 +617,7 @@ def render_panel(
         duration=duration,
         transcription=transcription,
         speakers=speakers,
+        composition_seed=config.comic_composition_seed_image,
     )
 
     cost = _compute_cost(image_attempts, was_static, duration)
