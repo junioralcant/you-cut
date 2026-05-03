@@ -54,7 +54,9 @@ def _run_cut(video_path, clip, index, config):
         with patch("youcut.clipper.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0)
             result = cut_clip(video_path, clip, index, config)
-            return result, mock_run.call_args[0][0]
+            # cut_clip pode disparar passos posteriores (decupagem, caption_burner)
+            # que também chamam subprocess.run. O primeiro call é sempre o cut.
+            return result, mock_run.call_args_list[0][0][0]
 
 
 class TestYoutubeMode:

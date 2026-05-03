@@ -69,7 +69,9 @@ class TestCutClip:
             with patch("youcut.clipper.subprocess.run") as mock_run:
                 mock_run.return_value = MagicMock(returncode=0)
                 result = cut_clip(video_path, clip, index, config)
-                return result, mock_run.call_args[0][0]
+                # cut_clip pode disparar decupagem e caption_burner, que também
+                # chamam subprocess.run. O primeiro call é sempre o cut.
+                return result, mock_run.call_args_list[0][0][0]
 
     def test_ffmpeg_command_includes_scale_1080x1920(self, config, viral_clip, tmp_path):
         video_path = tmp_path / "video.mp4"

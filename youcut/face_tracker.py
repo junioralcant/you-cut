@@ -309,8 +309,8 @@ _MIN_FACE_DIM_PX = 40
 
 # Padding applied around the aggregate bounding box of all valid faces.
 # Vertical is larger than horizontal so the framing keeps headroom above hair.
-_FRAMING_HORIZONTAL_PADDING = 0.30
-_FRAMING_VERTICAL_PADDING = 0.55
+_FRAMING_HORIZONTAL_PADDING = 0.10
+_FRAMING_VERTICAL_PADDING = 0.20
 
 # Cluster face centres into horizontal bins of this width (pixels) when
 # aggregating across the clip. Bins capture distinct speaker positions.

@@ -83,12 +83,12 @@ def test_compose_social_clip_builds_social_output(monkeypatch, tmp_path):
 
 def test_build_bottom_crop_filter_anchors_on_face_when_known():
     # Source 1080x1920 portrait → bottom panel 1080x880.
-    # Face center at y_norm=0.30 → y_scaled=576. Target ratio 0.55 → desired
-    # offset = 576 - 880*0.55 = 92, clamped to [0, 1040].
+    # Face center at y_norm=0.30 → y_scaled=576. Target ratio 0.45 → desired
+    # offset = 576 - 880*0.45 = 180, clamped to [0, 1040].
     result = _build_bottom_crop_filter(
         src_w=1080, src_h=1920, target_w=1080, target_h=880, face_y_norm=0.30,
     )
-    assert result == "scale=1080:1920,crop=1080:880:0:92"
+    assert result == "scale=1080:1920,crop=1080:880:0:180"
 
 
 def test_build_bottom_crop_filter_falls_back_to_center_when_no_face():

@@ -231,6 +231,7 @@ def _run_single_source_pipeline(
     metadata_paths: list[Path] = []
     captions_applied_flags: list[bool] = []
     caption_warnings: list[str | None] = []
+    captions_already_burned: list[bool] = []
 
     with progress:
         task_dl = progress.add_task("Baixando vídeo...", total=None)
@@ -283,9 +284,12 @@ def _run_single_source_pipeline(
         task_cut = progress.add_task("Cortando clipes...", total=len(viral_clips))
         for i, clip in enumerate(viral_clips):
             try:
-                clip_path = cut_clip(video_path, clip, i, config)
-                clip_path, _, _ = _extract_cut_result(clip_path)
+                cut_result = cut_clip(video_path, clip, i, config)
+                clip_path, captions_burned, _ = _extract_cut_result(cut_result)
                 clip_paths.append(clip_path)
+                captions_already_burned.append(
+                    captions_burned and isinstance(cut_result, CaptionBurnResult)
+                )
             except Exception as e:
                 progress.stop()
                 _err_console.print(
@@ -309,6 +313,11 @@ def _run_single_source_pipeline(
                     clip_paths[index] = final_path
                     captions_applied_flags.append(captions_applied)
                     caption_warnings.append(caption_warning)
+                elif index < len(captions_already_burned) and captions_already_burned[index]:
+                    # CaptionBurner já queimou legendas (pós-decoupage) em cut_clip.
+                    # Pular o segundo burn evita legendas duplicadas e desalinhadas.
+                    captions_applied_flags.append(True)
+                    caption_warnings.append(None)
                 else:
                     add_captions(clip_path, transcription, clip, config)
                     captions_applied_flags.append(True)
@@ -415,6 +424,16 @@ def run(
         "--clips",
         help="Quantidade de clipes a gerar",
     ),
+    decoupage: bool = typer.Option(
+        True,
+        "--decoupage/--no-decoupage",
+        help="Remover silêncios/respirações dentro de cada clipe (ligado por padrão).",
+    ),
+    color_preset: str = typer.Option(
+        "none",
+        "--filter",
+        help="Preset de cor: none, warm, cool, vintage, punchy.",
+    ),
     log_level: str = typer.Option("INFO", "--log-level", help="Nível de log: DEBUG, INFO, WARNING, ERROR"),
     log_file: Optional[Path] = typer.Option(None, "--log-file", help="Caminho para salvar o arquivo de log"),
 ) -> None:
@@ -462,6 +481,8 @@ def run(
             platforms=selected_platforms,
             clips=clips_filter,
             social_layout_mode="speaker_bottom_ai_top",
+            decoupage_enabled=decoupage,
+            social_filter_preset=color_preset,
         )
     except Exception as e:
         _err_console.print(
@@ -1645,9 +1666,9 @@ def cuts(
         "all", "--platforms", help="Plataformas de upload: youtube, instagram, tiktok ou all"
     ),
     decoupage: bool = typer.Option(
-        False,
+        True,
         "--decoupage/--no-decoupage",
-        help="Remover silêncios/respirações dentro dos clipes (modo social).",
+        help="Remover silêncios/respirações dentro dos clipes (modo social, ligado por padrão).",
     ),
     color_preset: str = typer.Option(
         "none",

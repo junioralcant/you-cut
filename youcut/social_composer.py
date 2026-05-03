@@ -36,7 +36,7 @@ _DEFAULT_STYLE = PRESETS[0]
 # expressed as a fraction of the panel height. The detector reports the face
 # bounding box (chin → forehead) without hair, so we aim slightly below the
 # panel midline to keep hair / top of the head inside the frame.
-_BOTTOM_PANEL_FACE_TARGET = 0.55
+_BOTTOM_PANEL_FACE_TARGET = 0.45
 
 
 def generate_social_label(

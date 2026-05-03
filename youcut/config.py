@@ -46,7 +46,7 @@ class PipelineConfig(BaseSettings):
     social_layout_title_bg_color: str = "#F4C400"
     social_layout_title_text_color: str = "#111111"
 
-    decoupage_enabled: bool = False
+    decoupage_enabled: bool = True
     decoupage_noise_db: float = -30.0
     decoupage_min_silence_gap: float = 0.4
     decoupage_keep_padding: float = 0.05

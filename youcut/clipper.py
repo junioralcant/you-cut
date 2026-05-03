@@ -45,7 +45,7 @@ def cut_clip(
     if clip.cut_mode == "youtube":
         cmd = _build_youtube_cmd(video_path, clip, output_path)
     elif clip.cut_mode == "social" and config.social_layout_mode == "speaker_bottom_ai_top":
-        cmd = _build_social_raw_cmd(video_path, clip, output_path)
+        cmd = _build_social_raw_cmd(video_path, clip, config, output_path)
     else:
         cmd = _build_social_cmd(video_path, clip, config, output_path)
 
@@ -56,7 +56,7 @@ def cut_clip(
         logger.error("FFmpeg falhou (código %d): %s", e.returncode, stderr)
         raise
 
-    if config.decoupage_enabled and clip.cut_mode == "social":
+    if config.decoupage_enabled:
         try:
             remove_silences(
                 output_path,
@@ -77,27 +77,37 @@ def cut_clip(
 
 
 def _build_social_raw_cmd(
-    video_path: Path, clip: ViralClip, output_path: Path,
+    video_path: Path, clip: ViralClip, config: PipelineConfig, output_path: Path,
 ) -> list[str]:
     """Time-trim the source preserving original aspect ratio.
 
     The editorial layout (speaker_bottom_ai_top) defers framing to a
     post-cut face-aware step; pre-cropping here would discard the horizontal
     context needed to centre on a single speaker or zoom out for two.
+
+    Quando ``social_filter_preset`` está ativo, aplicamos o color grade
+    aqui para que o composer (que monta o canvas final) já receba o speaker
+    com o look desejado.
     """
     start = max(0.0, clip.start_time - PADDING)
     end = clip.end_time + PADDING
     duration = end - start
-    return [
+    color_chain = get_filter_chain(config.social_filter_preset)
+    cmd = [
         "ffmpeg",
         "-ss", str(start),
         "-i", str(video_path),
         "-t", str(duration),
+    ]
+    if color_chain:
+        cmd.extend(["-vf", color_chain])
+    cmd.extend([
         "-c:v", "libx264",
         "-c:a", "aac",
         "-y",
         str(output_path),
-    ]
+    ])
+    return cmd
 
 
 def _build_youtube_cmd(video_path: Path, clip: ViralClip, output_path: Path) -> list[str]:
