@@ -105,7 +105,7 @@ def generate_social_top_image(
         openai_client=openai_client,
         openai_api_key=openai_api_key,
         provider=getattr(config, "social_layout_image_provider", "openai") if config is not None else "openai",
-        target_size=(1080, getattr(config, "social_layout_top_image_height", 860) if config is not None else 860),
+        target_size=(1080, getattr(config, "social_layout_top_image_height", 600) if config is not None else 600),
     )
     output_path.write_bytes(image_bytes)
     logger.info("Imagem social superior gerada: method=%s output_path=%s", generation_method, output_path)

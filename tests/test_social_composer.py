@@ -76,9 +76,9 @@ def test_compose_social_clip_builds_social_output(monkeypatch, tmp_path):
     filter_complex = cmd[cmd.index("-filter_complex") + 1]
     assert output_path.name == "clip_social.mp4"
     assert "-filter_complex" in cmd
-    assert "overlay=0:1040" in filter_complex
+    assert "overlay=0:740" in filter_complex
     # Bottom crop must use a face-aware Y offset (not the default centre crop).
-    assert "crop=1080:880:0:" in filter_complex
+    assert "crop=1080:1180:0:" in filter_complex
 
 
 def test_build_bottom_crop_filter_anchors_on_face_when_known():
