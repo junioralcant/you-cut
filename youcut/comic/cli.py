@@ -121,6 +121,44 @@ def _make_stage_logger(progress: bool):
             _console.print(
                 f"[yellow]AVISO: falha ao gerar metadados ({payload.get('error')})[/yellow]"
             )
+        elif name == "cast_anchors":
+            _console.print(
+                f"[blue]» gerando âncoras dos {payload.get('n')} personagens…[/blue]"
+            )
+        elif name == "composition_master":
+            _console.print("[blue]» montando composição master da cena…[/blue]")
+        elif name == "composition_master_done":
+            _console.print(
+                f"[green]✓ master:[/green] {payload.get('path')}"
+            )
+        elif name == "prunaai":
+            _console.print(
+                "[blue]» gerando animação completa via Prunaai (1 chamada)…[/blue]"
+            )
+        elif name == "scenes_plan":
+            _console.print("[blue]» planejando cenas narrativas (Claude)…[/blue]")
+        elif name == "scenes_reused":
+            _console.print(f"[green]✓ scenes.json reusado ({payload.get('n')} cenas)[/green]")
+        elif name == "scenes_anchor":
+            _console.print("[blue]» gerando visual anchor canônico…[/blue]")
+        elif name == "scenes_masters":
+            _console.print(f"[blue]» gerando masters de {payload.get('n')} cenas…[/blue]")
+        elif name == "scenes_attribution":
+            _console.print("[blue]» word-level visual attribution (Claude vision)…[/blue]")
+        elif name == "scenes_attribution_reused":
+            _console.print(f"[green]✓ attribution reusada ({payload.get('n')} palavras)[/green]")
+        elif name == "scenes_render":
+            _console.print(f"[blue]» renderizando {payload.get('n')} chunks via Prunaai…[/blue]")
+        elif name == "scenes_compose":
+            _console.print("[blue]» concat com crossfades + mux + finals…[/blue]")
+        elif name == "scenes_done_with_subs":
+            _console.print(f"[green]✓ vídeo COM legendas:[/green] {payload.get('path')}")
+        elif name == "scenes_done_no_subs":
+            _console.print(f"[green]✓ vídeo SEM legendas:[/green] {payload.get('path')}")
+        elif name == "prunaai_done":
+            _console.print(
+                f"[green]✓ Prunaai:[/green] {payload.get('size_kb')} KB"
+            )
         elif name == "dry_run_done":
             _console.print(f"[green]✓ dry-run concluído:[/green] {payload.get('path')}")
         elif name == "done":
@@ -236,6 +274,17 @@ def comic_command(
             "plataforma (TikTok, Reels, Shorts) ao final do pipeline."
         ),
     ),
+    engine: str = typer.Option(
+        "scenes",
+        "--engine",
+        help=(
+            "Engine de animação. `scenes` (default) divide em N cenas "
+            "narrativas com word-level lip-sync via Claude vision (recomendado). "
+            "`prunaai` gera o vídeo final em 1 chamada à IA (mais barato mas "
+            "sem controle de narrativa). `panels` usa o modo clássico Hailuo "
+            "i2v com N painéis individuais."
+        ),
+    ),
 ) -> None:
     """Gera um motion comic 9:16 a partir de um vídeo local (≤120s)."""
 
@@ -268,6 +317,12 @@ def comic_command(
         config_overrides["comic_composition_seed_image"] = composition_image
     if no_metadata:
         config_overrides["comic_generate_metadata"] = False
+    if engine not in ("prunaai", "panels", "scenes"):
+        _err_console.print(
+            f"[red]--engine inválido: {engine!r} (use 'scenes', 'prunaai' ou 'panels')[/red]"
+        )
+        raise typer.Exit(code=2)
+    config_overrides["comic_animation_engine"] = engine
 
     try:
         config = PipelineConfig(**config_overrides)

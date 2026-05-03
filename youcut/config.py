@@ -40,8 +40,8 @@ class PipelineConfig(BaseSettings):
     social_layout_title_enabled: bool = True
     social_layout_image_provider: Literal["openai", "local"] = "openai"
     social_layout_apply_face_tracking: bool = True
-    social_layout_top_image_height: int = 860
-    social_layout_title_band_height: int = 180
+    social_layout_top_image_height: int = 600
+    social_layout_title_band_height: int = 140
     social_layout_title_color_mode: Literal["engagement_default", "yellow", "orange", "custom"] = "engagement_default"
     social_layout_title_bg_color: str = "#F4C400"
     social_layout_title_text_color: str = "#111111"
@@ -76,6 +76,19 @@ class PipelineConfig(BaseSettings):
     comic_output_width: int = 1080
     comic_output_height: int = 1920
     comic_generate_metadata: bool = True
+    comic_animation_engine: Literal["prunaai", "panels", "scenes"] = "scenes"
+    # ── Engine "scenes" (default) — narrativa multi-cena + word-level lip-sync ──
+    comic_scenes_count: int = 4  # número de cenas narrativas
+    comic_scenes_crossfade_dur: float = 0.25  # crossfade entre chunks (s)
+    comic_scenes_min_chunk_dur: float = 1.05  # mín exigido pelo prunaai (s)
+    comic_scenes_gap_absorb_threshold: float = 0.5  # gaps > X são absorvidos pelo chunk anterior
+    comic_scenes_smooth_attribution: bool = True  # corrige mis-attributions cercadas
+    comic_scenes_inter_call_pause_s: float = 11.0  # pausa entre chamadas prunaai (rate-limit)
+    comic_scenes_watermark_text: str | None = None  # ex: "@anima.nos" — None desliga watermark
+    comic_scenes_watermark_opacity: float = 0.40
+    comic_scenes_watermark_y_from_bottom: int = 280  # px do fundo
+    comic_scenes_emit_no_subs_version: bool = True  # gera também versão sem legendas
+    comic_scenes_style_ref_image: Path | None = None  # imagem de referência canônica (opcional)
 
     @model_validator(mode="after")
     def validate_api_key_present(self) -> "PipelineConfig":

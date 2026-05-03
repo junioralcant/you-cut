@@ -183,7 +183,34 @@ def run_comic_pipeline(
     - ``dry_run=True``: roda até script_planner e grava ``dry_run.json``.
     - ``session_id`` carregado: reaproveita cast e painéis prontos; regenera apenas o que faltar.
     - ``regenerate_panels=[i,...]``: força regeneração somente desses índices.
+
+    Quando ``config.comic_animation_engine == "prunaai"`` (default), delega
+    ao orquestrador alternativo em :mod:`youcut.comic.prunaai_pipeline` —
+    que gera o vídeo final em 1 chamada à IA (mais barato e mais rápido).
+    O modo ``"panels"`` mantém o pipeline clássico (Hailuo i2v por painel).
     """
+
+    if config.comic_animation_engine == "scenes" and not dry_run and not regenerate_panels:
+        from youcut.comic.scenes_pipeline import run_scenes_pipeline
+
+        return run_scenes_pipeline(
+            video_path,
+            config,
+            session_id=session_id,
+            callbacks=callbacks,
+            image_provider=image_provider,
+        )
+
+    if config.comic_animation_engine == "prunaai" and not dry_run and not regenerate_panels:
+        from youcut.comic.prunaai_pipeline import run_prunaai_pipeline
+
+        return run_prunaai_pipeline(
+            video_path,
+            config,
+            session_id=session_id,
+            callbacks=callbacks,
+            image_provider=image_provider,
+        )
 
     callbacks = callbacks or PipelineCallbacks()
     callbacks.on_stage("validate", {"video_path": str(video_path)})

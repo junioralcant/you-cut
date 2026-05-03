@@ -1,8 +1,17 @@
 # YouCut
 
-Aplicação de linha de comando para transformar vídeos longos em clipes curtos com potencial viral.
+Aplicação de linha de comando que automatiza a transformação de vídeos longos em clipes prontos para publicação **e** vídeos curtos em motion comics animados.
 
-O fluxo atual da aplicação:
+## Comandos
+
+| Comando | Para quê |
+|---|---|
+| `youcut run <url>` | Pipeline legado: baixa → transcreve → analisa com Claude → corta clipes virais 9:16 com legendas. |
+| `youcut cuts <url>` | **Cortes inteligentes** (recomendado): clipes longos 16:9 pra YouTube ou shorts 9:16 pra TikTok/Reels/Shorts. |
+| `youcut comic <video>` | **Motion comic** animado a partir de vídeo curto (≤120s) — personagens cartoon ilustrados com lip-sync por palavra, áudio original preservado. |
+| `youcut auth …` | Gerencia OAuth de YouTube/Instagram/TikTok pro upload automático. |
+
+O fluxo padrão (`run` / `cuts`):
 
 1. baixa um vídeo do YouTube ou usa um arquivo local;
 2. transcreve o áudio com Whisper;
@@ -11,6 +20,8 @@ O fluxo atual da aplicação:
 5. adiciona legendas embutidas;
 6. (opcional) queima o título nos primeiros 5 segundos com `--title-overlay`;
 7. exporta metadados prontos para publicação.
+
+O comando `youcut comic` segue um pipeline diferente — ver [seção dedicada](#motion-comic--youcut-comic) abaixo.
 
 ## Requisitos
 
@@ -72,8 +83,13 @@ Variáveis opcionais:
 # OUTPUT_DIR=output
 # DRY_RUN=false
 
-# Necessário apenas para o modo YouTube (geração de thumbnails via DALL-E 3):
+# Necessário para o modo YouTube (geração de thumbnails via DALL-E 3) e
+# para o `youcut comic` (geração de masters/anchors via gpt-image-1):
 # OPENAI_API_KEY=sua_chave_openai
+
+# Necessário para o `youcut comic` engines `scenes` (default) e `prunaai`
+# (provider de animação prunaai/p-video-avatar e Hailuo i2v):
+# REPLICATE_API_TOKEN=sua_chave_replicate
 
 # Necessário apenas para publicar no YouTube via youcut cuts --upload:
 # YOUTUBE_CLIENT_SECRETS_FILE=caminho/para/client_secrets.json
@@ -287,6 +303,96 @@ Toda execução do Fluxo A salva uma sessão em `~/.youcut/sessions/`. Cada sess
 # Ver sessões disponíveis e iniciar Fluxo B em qualquer uma
 youcut cuts --history
 ```
+
+---
+
+## Motion Comic — `youcut comic`
+
+Transforma um vídeo curto (≤120s) em uma animação cartoon 9:16 (1080×1920) com personagens ilustrados, **lip-sync por palavra**, áudio original preservado e legendas opcionais.
+
+```bash
+youcut comic ./meu_video.mp4
+```
+
+Saída em `output/<nome_do_video>/`:
+- `motion_comic_scenes.mp4` — versão **com legendas** word-by-word
+- `motion_comic_scenes_no_subs.mp4` — versão **sem legendas** (publicação em redes que prefiram caption nativa)
+- `comic/_scenes/master_*.png` — masters de cada cena (debug)
+- `comic/_scenes/_visual_anchor.png` — referência canônica de estilo
+
+### Engines disponíveis (`--engine`)
+
+| Engine | Quando usar | Custo aprox | Tempo aprox |
+|---|---|---|---|
+| **`scenes`** (default, recomendado) | Diálogos, comédia, narrativa multi-cena. Lip-sync correto via Claude vision word-level. | ~$0.50–1.00 | ~10–15 min |
+| `prunaai` | Monólogo simples ou cena única, sem narrativa. | ~$0.10 | ~5 min |
+| `panels` | Máximo controle por beat, vídeos longos com muitas trocas. | ~$2.00 | ~20–30 min |
+
+### Engine `scenes` — como funciona
+
+1. **Scene planner** (Claude texto): divide a transcrição em N cenas narrativas (default 4).
+2. **Visual anchor + masters por cena** (gpt-image-1): gera 1 imagem-âncora canônica + 1 master por cena, todas referenciando o anchor pra consistência de estilo, paleta e design dos personagens.
+3. **Word-level visual attribution** (Claude vision): extrai 1 frame por palavra (240px) e identifica qual personagem articula a boca em cada palavra.
+4. **Smoothing conservador**: corrige mis-attributions onde o texto do chunk é repetição clara do vizinho (ex.: "é viadão" entre dois chunks Eva), preservando interjeições legítimas (ex.: "É mesmo, é?" da Eva entre falas da cobra).
+5. **Smart-cuts**: chunks < 1.05s (mínimo do Prunaai) são estendidos absorvendo silêncio adjacente.
+6. **Gap absorption**: gaps > 0.5s entre chunks (laughs, "harrá", expressões) são absorvidos pelo chunk anterior — o Prunaai anima essas reações em vez de virar freeze-frame.
+7. **Render** (Prunaai per chunk): cada chunk recebe (master da cena pai + áudio do range + prompt direcionado pro speaker correto + outros em silêncio total).
+8. **Concat com crossfades** (~0.25s): transições suaves entre chunks, preserva duração via tpad.
+9. **Mux + scale + crop + watermark**: scale+crop pra 1080×1920 (sem letterbox), watermark `@username` opcional na safe zone.
+
+### Configurações (`PipelineConfig`)
+
+```env
+# .env
+COMIC_ANIMATION_ENGINE=scenes               # scenes (default) | prunaai | panels
+COMIC_SCENES_COUNT=4                        # nº de cenas narrativas
+COMIC_SCENES_CROSSFADE_DUR=0.25             # crossfade entre chunks (s)
+COMIC_SCENES_GAP_ABSORB_THRESHOLD=0.5       # gaps > X são absorvidos
+COMIC_SCENES_SMOOTH_ATTRIBUTION=True        # corrige mis-attributions cercadas
+COMIC_SCENES_INTER_CALL_PAUSE_S=11.0        # pausa entre chamadas Prunaai (rate-limit)
+COMIC_SCENES_WATERMARK_TEXT=@anima.nos      # watermark — null/vazio desliga
+COMIC_SCENES_WATERMARK_OPACITY=0.40
+COMIC_SCENES_WATERMARK_Y_FROM_BOTTOM=280    # px do fundo (safe zone)
+COMIC_SCENES_EMIT_NO_SUBS_VERSION=True      # gera versão sem legendas
+COMIC_SCENES_STYLE_REF_IMAGE=               # path opcional de imagem de estilo canônico
+```
+
+### Variáveis de ambiente obrigatórias
+
+- `OPENAI_API_KEY` — gpt-image-1 (anchors + masters)
+- `REPLICATE_API_TOKEN` — Prunaai (`prunaai/p-video-avatar`) e Hailuo i2v
+- `ANTHROPIC_API_KEY` — Claude (scene planner + word-level attribution)
+
+> **Atenção:** contas Replicate com saldo < $5 têm rate-limit reduzido (6/min com burst=1). O default `COMIC_SCENES_INTER_CALL_PAUSE_S=11s` respeita esse limite.
+
+### Flags do CLI
+
+```bash
+youcut comic <video> \
+  --engine scenes \                  # ou prunaai/panels
+  --max-panels 4 \                   # nº de cenas (engine scenes) ou painéis (panels)
+  --cost-cap 2.0 \                   # teto de custo USD
+  --session <id> \                   # retoma sessão anterior (reusa cast/anchors)
+  --regenerate-panel 2,5 \           # regen específico (modo panels)
+  --invent-cast \                    # inventa cast a partir do áudio (sem rosto real)
+  --multi-participant \              # exige ≥2 personagens (modo panels)
+  --scene "descrição do cenário" \   # cenário fixo
+  --no-metadata \                    # pula geração de metadados editoriais
+  --yes -y \                         # auto-aprova cast e custo
+  --no-progress                      # sem stages no console
+```
+
+### Cache e retomada
+
+Toda execução cacheia:
+- transcrição (MD5 do vídeo)
+- atribuição visual word-level
+- plano de cenas (`scenes.json`)
+- visual anchor + masters
+- raw chunks renderizados
+- pre-rendered intermediates (extended chunks, xfade steps)
+
+Se você matar o processo no meio, basta rodar de novo — só o que faltar é regerado. O `reconcile_cache` detecta automaticamente chunks com áudio fora de sync (ex.: depois de smoothing/gap-absorb mudar timestamps) e os apaga pra regerar.
 
 ---
 

@@ -49,11 +49,17 @@ Flags relevantes: `--max-clips/-n`, `--skip-review`, `--upload`, `--platforms`, 
 Gerencia tokens OAuth de YouTube / Instagram / TikTok, salvos em `~/.youcut/credentials/<plataforma>.json`.
 
 ### `youcut comic <video>`
-Pipeline **motion comic**: aceita um vídeo local curto (≤120 s) e gera um MP4 9:16 (1080×1920) com personagens ilustrados, áudio original preservado e legendas queimadas. Estética minimalista pastel com cabeças circulares brancas; consistência entre painéis via fichas-âncora geradas uma única vez por personagem (gpt-image-1 + Runway Gen-4 Turbo). Sai em `output/<video>/motion_comic.mp4` com `comic/run_report.json` para auditoria.
+Pipeline **motion comic**: aceita um vídeo local curto (≤120 s) e gera um MP4 9:16 (1080×1920) com personagens ilustrados, áudio original preservado e legendas queimadas. Suporta 3 engines de animação (via `--engine`):
 
-Flags relevantes: `--max-panels/-n`, `--cost-cap`, `--dry-run`, `--session <id>`, `--regenerate-panel I[,J,...]`, `--yes/-y`, `--no-progress`.
+- **`scenes`** (default, recomendado) — divide a transcrição em N cenas narrativas (Claude scene planner), gera 1 master por cena com **anchor visual canônico** pra consistência de estilo, faz **word-level visual attribution** (Claude vision identifica quem articula a boca em cada palavra), aplica **smoothing conservador** das atribuições, **gap absorption** (laughs/expressões não-fala não viram freeze) e **crossfade** entre chunks. Emite versões com e sem legenda + watermark configurável (`comic_scenes_watermark_text`). Implementação em `youcut/comic/scenes_pipeline.py`.
+- **`prunaai`** — gera o vídeo inteiro em 1 chamada à IA (`prunaai/p-video-avatar`). Mais barato (~$0.05/vídeo) e mais rápido (~70s), mas sem controle narrativo nem lip-sync correto em diálogos.
+- **`panels`** — modo clássico (Hailuo i2v por painel). Mais caro e demorado mas com máximo controle por beat.
 
-Variáveis adicionais: `RUNWAY_API_KEY` (obrigatória) e `OPENAI_API_KEY` (obrigatória para o `comic`).
+Flags relevantes: `--engine {scenes,prunaai,panels}`, `--max-panels/-n`, `--cost-cap`, `--dry-run`, `--session <id>`, `--regenerate-panel I[,J,...]`, `--yes/-y`, `--no-progress`.
+
+Configs específicas do `scenes` (em `PipelineConfig`): `comic_scenes_count` (default 4), `comic_scenes_crossfade_dur` (0.25s), `comic_scenes_gap_absorb_threshold` (0.5s), `comic_scenes_smooth_attribution` (True), `comic_scenes_inter_call_pause_s` (11s para rate-limit Replicate), `comic_scenes_watermark_text`, `comic_scenes_emit_no_subs_version`, `comic_scenes_style_ref_image`.
+
+Variáveis adicionais: `RUNWAY_API_KEY` (obrigatória pro engine `panels`), `REPLICATE_API_TOKEN` (obrigatória pros engines `prunaai` e `scenes`), `OPENAI_API_KEY` (obrigatória para o `comic`).
 
 ---
 
