@@ -243,8 +243,11 @@ def test_video_too_long_returns_error(runner, env, tmp_path):
 def test_cost_cap_exceeded_aborts(runner, env, short_video, monkeypatch):
     _patch_pipeline_internals(monkeypatch)
 
+    # cost-cap preflight é específico do modo `panels`. Forçar engine
+    # explicitamente pra esse teste validar a checagem de teto.
     result = runner.invoke(
-        comic_app, [str(short_video), "--cost-cap", "0.001", "-y"]
+        comic_app,
+        [str(short_video), "--engine", "panels", "--cost-cap", "0.001", "-y"],
     )
     combined = (result.stderr or "") + (result.stdout or "") + str(result.exception or "")
     assert result.exit_code == 1
@@ -262,7 +265,7 @@ def test_run_comic_pipeline_dry_run_does_not_call_providers(env, short_video, mo
     fake_i2v = MagicMock()
 
     from youcut.config import PipelineConfig
-    config = PipelineConfig(
+    config = PipelineConfig(comic_animation_engine="panels", 
         output_dir=env["tmp"] / "out",
         comic_cost_cap_usd=10.0,
     )
@@ -289,7 +292,7 @@ def test_run_comic_pipeline_full_run_with_fakes(env, short_video, monkeypatch):
     fake_i2v = FakeI2VProvider()
 
     from youcut.config import PipelineConfig
-    config = PipelineConfig(
+    config = PipelineConfig(comic_animation_engine="panels", 
         output_dir=env["tmp"] / "out",
         comic_cost_cap_usd=100.0,
         comic_i2v_concurrency=2,
@@ -316,7 +319,7 @@ def test_run_comic_pipeline_resume_skips_cast_and_script(env, short_video, monke
     fake_i2v = FakeI2VProvider()
 
     from youcut.config import PipelineConfig
-    config = PipelineConfig(
+    config = PipelineConfig(comic_animation_engine="panels", 
         output_dir=env["tmp"] / "out",
         comic_cost_cap_usd=100.0,
     )
@@ -364,7 +367,7 @@ def test_run_comic_pipeline_regenerate_panel_only(env, short_video, monkeypatch)
     fake_i2v = FakeI2VProvider()
 
     from youcut.config import PipelineConfig
-    config = PipelineConfig(
+    config = PipelineConfig(comic_animation_engine="panels", 
         output_dir=env["tmp"] / "out",
         comic_cost_cap_usd=100.0,
     )
@@ -398,7 +401,7 @@ def test_run_comic_pipeline_user_rejects_cast_aborts(env, short_video, monkeypat
     _patch_pipeline_internals(monkeypatch)
 
     from youcut.config import PipelineConfig
-    config = PipelineConfig(output_dir=env["tmp"] / "out")
+    config = PipelineConfig(comic_animation_engine="panels", output_dir=env["tmp"] / "out")
 
     callbacks = PipelineCallbacks(confirm_cast=lambda _c: False)
 
@@ -416,7 +419,7 @@ def test_run_comic_pipeline_user_rejects_cost_aborts(env, short_video, monkeypat
     _patch_pipeline_internals(monkeypatch)
 
     from youcut.config import PipelineConfig
-    config = PipelineConfig(output_dir=env["tmp"] / "out", comic_cost_cap_usd=100.0)
+    config = PipelineConfig(comic_animation_engine="panels", output_dir=env["tmp"] / "out", comic_cost_cap_usd=100.0)
 
     callbacks = PipelineCallbacks(confirm_cost=lambda _b: False)
 
@@ -434,7 +437,7 @@ def test_run_comic_pipeline_unknown_session_raises(env, short_video, monkeypatch
     _patch_pipeline_internals(monkeypatch)
 
     from youcut.config import PipelineConfig
-    config = PipelineConfig(output_dir=env["tmp"] / "out")
+    config = PipelineConfig(comic_animation_engine="panels", output_dir=env["tmp"] / "out")
 
     with pytest.raises(ComicPipelineError):
         run_comic_pipeline(

@@ -137,7 +137,7 @@ def test_session_resume_only_regenerates_missing_panels(env, tmp_path, monkeypat
     _patch_pipeline(monkeypatch, panels=_build_panels(n=5))
 
     from youcut.config import PipelineConfig
-    config = PipelineConfig(
+    config = PipelineConfig(comic_animation_engine="panels", 
         output_dir=env["tmp"] / "out",
         comic_cost_cap_usd=100.0,
     )
@@ -189,7 +189,7 @@ def test_unknown_session_raises_pipeline_error(env, tmp_path, monkeypatch):
 
     from youcut.config import PipelineConfig
     from youcut.comic.pipeline import ComicPipelineError
-    config = PipelineConfig(output_dir=env["tmp"] / "out")
+    config = PipelineConfig(comic_animation_engine="panels", output_dir=env["tmp"] / "out")
 
     with pytest.raises(ComicPipelineError, match=r"não encontrada|Sessão"):
         run_comic_pipeline(
@@ -206,7 +206,7 @@ def test_resumed_session_skips_cast_and_script_calls(env, tmp_path, monkeypatch)
     _patch_pipeline(monkeypatch)
 
     from youcut.config import PipelineConfig
-    config = PipelineConfig(output_dir=env["tmp"] / "out", comic_cost_cap_usd=100.0)
+    config = PipelineConfig(comic_animation_engine="panels", output_dir=env["tmp"] / "out", comic_cost_cap_usd=100.0)
 
     first = run_comic_pipeline(
         video,

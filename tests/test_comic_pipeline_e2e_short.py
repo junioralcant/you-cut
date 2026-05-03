@@ -177,7 +177,7 @@ def test_e2e_pipeline_produces_final_mp4_with_correct_duration(env, short_video,
     fake_i2v = FakeI2VProvider()
 
     from youcut.config import PipelineConfig
-    config = PipelineConfig(
+    config = PipelineConfig(comic_animation_engine="panels", 
         output_dir=env["tmp"] / "out",
         comic_cost_cap_usd=100.0,
         comic_i2v_concurrency=2,
@@ -200,7 +200,7 @@ def test_e2e_pipeline_preserves_audio_bit_identical(env, short_video, monkeypatc
     _patch_pipeline(monkeypatch)
 
     from youcut.config import PipelineConfig
-    config = PipelineConfig(
+    config = PipelineConfig(comic_animation_engine="panels", 
         output_dir=env["tmp"] / "out",
         comic_cost_cap_usd=100.0,
     )
@@ -219,7 +219,7 @@ def test_e2e_pipeline_writes_run_report_with_schema(env, short_video, monkeypatc
     _patch_pipeline(monkeypatch)
 
     from youcut.config import PipelineConfig
-    config = PipelineConfig(
+    config = PipelineConfig(comic_animation_engine="panels", 
         output_dir=env["tmp"] / "out",
         comic_cost_cap_usd=100.0,
     )

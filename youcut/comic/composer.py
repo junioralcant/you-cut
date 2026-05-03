@@ -356,3 +356,67 @@ def compose(
 
     logger.info("comic.composer: vídeo final em %s (%.2fs)", final_path, final_duration)
     return final_path
+
+
+def compose_single_video(
+    raw_video_path: Path,
+    audio_source: Path,
+    transcription: TranscriptionResult,
+    output_dir: Path,
+    config: PipelineConfig,
+    *,
+    output_name: str = DEFAULT_OUTPUT_NAME,
+) -> Path:
+    """Composer simplificado para o modo prunaai (single-video).
+
+    Pula o concat de painéis (não há painéis aqui) e aplica diretamente:
+    1. mux do áudio original (substitui o áudio do prunaai pelo source);
+    2. queima de legendas word-by-word a partir da transcrição;
+    3. scale + crop pra 1080×1920 (config.comic_output_*).
+
+    Retorna o path do vídeo final em ``output_dir/output_name``.
+    """
+
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    work_dir = output_dir / "comic" / "_compose"
+    work_dir.mkdir(parents=True, exist_ok=True)
+
+    # 1) Mux áudio original — o prunaai output já tem áudio mas re-mux
+    # garante fidelidade ao source.
+    muxed_path = work_dir / "muxed.mp4"
+    _mux_audio(raw_video_path, audio_source, muxed_path)
+
+    # 2) Legendas palavra-a-palavra.
+    output_width = getattr(config, "comic_output_width", OUTPUT_WIDTH)
+    output_height = getattr(config, "comic_output_height", OUTPUT_HEIGHT)
+    audio_duration = transcription.segments[-1].end if transcription.segments else 0.0
+    words = _filter_words_in_range(transcription, 0.0, audio_duration + 1.0)
+    ass_doc = build_ass_for_words(
+        words, output_size=(output_width, output_height), offset=0.0
+    )
+    ass_path = work_dir / "captions.ass"
+    ass_path.write_text(ass_doc, encoding="utf-8")
+
+    # 3) Burn subtitles + scale 1080×1920.
+    final_path = output_dir / output_name
+    _burn_subtitles(
+        muxed_path,
+        ass_path,
+        final_path,
+        output_width=output_width,
+        output_height=output_height,
+    )
+
+    final_duration = _ffprobe_duration(final_path)
+    if abs(final_duration - audio_duration) > DURATION_TOLERANCE_SECONDS:
+        logger.warning(
+            "comic.composer.single: duração final %.2fs difere do áudio (%.2fs)",
+            final_duration,
+            audio_duration,
+        )
+
+    logger.info(
+        "comic.composer.single: vídeo final em %s (%.2fs)", final_path, final_duration
+    )
+    return final_path

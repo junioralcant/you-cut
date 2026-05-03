@@ -115,7 +115,7 @@ def test_regenerate_panel_only_replaces_targeted_index(env, tmp_path, monkeypatc
     _patch_pipeline(monkeypatch)
 
     from youcut.config import PipelineConfig
-    config = PipelineConfig(
+    config = PipelineConfig(comic_animation_engine="panels", 
         output_dir=env["tmp"] / "out",
         comic_cost_cap_usd=100.0,
     )
@@ -154,7 +154,7 @@ def test_regenerate_multiple_panels_at_once(env, tmp_path, monkeypatch):
     _patch_pipeline(monkeypatch)
 
     from youcut.config import PipelineConfig
-    config = PipelineConfig(output_dir=env["tmp"] / "out", comic_cost_cap_usd=100.0)
+    config = PipelineConfig(comic_animation_engine="panels", output_dir=env["tmp"] / "out", comic_cost_cap_usd=100.0)
 
     first = run_comic_pipeline(
         video,
@@ -185,7 +185,7 @@ def test_regenerate_skips_cast_build_when_session_has_cast(env, tmp_path, monkey
     _patch_pipeline(monkeypatch)
 
     from youcut.config import PipelineConfig
-    config = PipelineConfig(output_dir=env["tmp"] / "out", comic_cost_cap_usd=100.0)
+    config = PipelineConfig(comic_animation_engine="panels", output_dir=env["tmp"] / "out", comic_cost_cap_usd=100.0)
 
     first = run_comic_pipeline(
         video,
