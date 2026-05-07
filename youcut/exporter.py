@@ -1,9 +1,16 @@
+from __future__ import annotations
+
 from pathlib import Path
 
-from youcut.models import ViralClip
+from youcut.models import MusicTrack, ViralClip
 
 
-def export_metadata(clip: ViralClip, index: int, output_dir: Path) -> Path:
+def export_metadata(
+    clip: ViralClip,
+    index: int,
+    output_dir: Path,
+    music_track: MusicTrack | None = None,
+) -> Path:
     if index < 0:
         raise ValueError(f"index must be >= 0, got {index}")
 
@@ -33,6 +40,14 @@ def export_metadata(clip: ViralClip, index: int, output_dir: Path) -> Path:
         f"MOTIVO DA SELEÇÃO\n"
         f"{clip.reason}\n"
     )
+
+    if music_track is not None:
+        content += (
+            f"\n"
+            f"TRILHA SONORA\n"
+            f"Nome: {music_track.name}\n"
+            f"Fonte: {music_track.pixabay_url}\n"
+        )
 
     output_path.write_text(content, encoding="utf-8")
     return output_path

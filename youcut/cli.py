@@ -25,7 +25,9 @@ from youcut.face_tracker import apply_face_tracking, frame_for_panel
 from youcut.config import PipelineConfig
 from youcut.downloader import VideoDownloadError, download_video
 from youcut.exporter import export_metadata
-from youcut.models import CaptionBurnResult, ClipRecord, CutMode, SessionData, TranscriptionResult, ViralClip
+from youcut.models import CaptionBurnResult, ClipRecord, CutMode, MusicTrack, SessionData, TranscriptionResult, ViralClip
+from youcut.music_mixer import MusicMixer
+from youcut.music_provider import PixabayMusicProvider
 from youcut.preview import generate_clip_preview
 from youcut.reviewer import review_clips
 from youcut.selector import prompt_clip_selection
@@ -41,7 +43,7 @@ from youcut.uploader.instagram import InstagramUploader
 from youcut.uploader.tiktok import TikTokUploader
 from youcut.uploader.youtube import YouTubeUploader
 from youcut.url_utils import normalize_video_url
-from youcut.video_metadata import VideoMetadataError, fetch_metadata
+from youcut.video_metadata import VideoMetadata, VideoMetadataError, fetch_metadata
 from youcut.yt_dlp_auth import YtDlpAuthConfig, YtDlpAuthConfigError, resolve_yt_dlp_auth_config
 
 logger = logging.getLogger(__name__)
@@ -1267,6 +1269,8 @@ def run_flow_c(
     upload: bool = False,
     platforms: list[str] | None = None,
     auth_config: YtDlpAuthConfig | None = None,
+    music: bool = False,
+    music_mood: Optional[str] = None,
 ) -> None:
     """Fluxo C: vídeos curtos diretamente do vídeo original (9:16 para redes sociais)."""
     progress = Progress(
@@ -1314,6 +1318,10 @@ def run_flow_c(
         if config.cut_mode == "youtube":
             _show_youtube_duration_guidance(viral_clips)
 
+        music_provider = PixabayMusicProvider(config) if (music and config.cut_mode == "social") else None
+        music_mixer = MusicMixer() if (music and config.cut_mode == "social") else None
+        music_tracks: list[MusicTrack | None] = []
+
         clip_paths: list[Path] = []
         caption_statuses: list[tuple[bool, str | None]] = []
         task_cut = progress.add_task("Cortando clipes (9:16)...", total=len(viral_clips))
@@ -1343,6 +1351,27 @@ def run_flow_c(
                     clip_path, captions_applied, caption_warning = _finalize_editorial_social_clip(
                         clip_path, clip, config
                     )
+
+                # Etapa de trilha sonora (apenas modo social)
+                track: MusicTrack | None = None
+                if music and music_provider and music_mixer and config.cut_mode == "social":
+                    progress.stop()
+                    try:
+                        mood = music_mood if music_mood else music_provider.classify_mood(clip)
+                        _console.print(f"🎵 Detectando mood: {mood}...")
+                        clip_dur = clip.end_time - clip.start_time
+                        track = music_provider.fetch_track(mood, clip_dur)
+                        if track:
+                            _console.print(f'🎵 Trilha: "{track.name}" — Pixabay Music')
+                            clip_path = music_mixer.mix(clip_path, track, config)
+                        else:
+                            _console.print(
+                                f'[yellow]⚠️  Nenhuma música encontrada para o mood "{mood}". Clipe gerado sem trilha.[/yellow]'
+                            )
+                    finally:
+                        progress.start()
+
+                music_tracks.append(track)
                 clip_paths.append(clip_path)
                 caption_statuses.append((captions_applied, caption_warning))
             except Exception as e:
@@ -1352,9 +1381,12 @@ def run_flow_c(
             progress.advance(task_cut)
         progress.update(task_cut, description="[green]Clipes cortados[/green]")
 
+    output_dir = config.output_dir / video_path.stem
     clip_records: list[ClipRecord] = []
     for i, (clip, clip_path) in enumerate(zip(viral_clips, clip_paths)):
         captions_applied, caption_warning = caption_statuses[i] if i < len(caption_statuses) else (True, None)
+        track = music_tracks[i] if i < len(music_tracks) else None
+        export_metadata(clip, i, output_dir, music_track=track)
         clip_records.append(ClipRecord(
             title=clip.title,
             start_time=clip.start_time,
@@ -1366,6 +1398,7 @@ def run_flow_c(
             hashtags=clip.hashtags,
             captions_applied=captions_applied,
             caption_warning=caption_warning,
+            music_track=track,
         ))
 
     if not skip_review:
@@ -1677,6 +1710,10 @@ def cuts(
     ),
     log_level: str = typer.Option("INFO", "--log-level", help="Nível de log"),
     log_file: Optional[Path] = typer.Option(None, "--log-file", help="Arquivo de log"),
+    music: bool = typer.Option(False, "--music", help="Adicionar trilha sonora automática (apenas modo social)"),
+    music_mood: Optional[str] = typer.Option(None, "--music-mood", help="Override manual do mood musical (ex: reflexivo, energico)"),
+    mode: Optional[str] = typer.Option(None, "--mode", help="Modo de corte: social ou youtube (pula seleção interativa)"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Confirmar automaticamente todas as perguntas interativas"),
 ) -> None:
     """Gera cortes inteligentes (YouTube 16:9 ou redes sociais 9:16) com revisão e publicação."""
     _configure_logging(log_level, log_file)
@@ -1690,7 +1727,11 @@ def cuts(
     auth_config = _resolve_cli_yt_dlp_auth_config()
 
     # RF-01: seleção do modo como primeira etapa
-    mode: CutMode = _select_cut_mode()
+    if mode in ("social", "youtube"):
+        cut_mode: CutMode = mode  # type: ignore[assignment]
+    else:
+        cut_mode = _select_cut_mode()
+    mode = cut_mode
 
     # RF-05/06: validar URL e exibir metadados
     url = source
@@ -1702,17 +1743,32 @@ def cuts(
         if not url:
             raise typer.Exit(code=0)
 
-    url = normalize_video_url(url)
+    local_path = Path(url) if Path(url).exists() else None
+    if local_path is None:
+        url = normalize_video_url(url)
 
     _console.print(f"\nBuscando metadados: [bold]{url}[/bold]")
-    try:
-        if auth_config is None:
-            video_meta = fetch_metadata(url)
-        else:
-            video_meta = fetch_metadata(url, auth_config=auth_config)
-    except VideoMetadataError as e:
-        _err_console.print(Panel(str(e), title="[red]Erro ao acessar vídeo[/red]", border_style="red"))
-        raise typer.Exit(code=1)
+    if local_path is not None:
+        import subprocess as _sp
+        dur_probe = _sp.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1", str(local_path)],
+            capture_output=True, text=True,
+        )
+        try:
+            dur_s = float(dur_probe.stdout.strip())
+        except ValueError:
+            dur_s = 0.0
+        video_meta = VideoMetadata(title=local_path.stem, duration_seconds=dur_s, url=str(local_path))
+    else:
+        try:
+            if auth_config is None:
+                video_meta = fetch_metadata(url)
+            else:
+                video_meta = fetch_metadata(url, auth_config=auth_config)
+        except VideoMetadataError as e:
+            _err_console.print(Panel(str(e), title="[red]Erro ao acessar vídeo[/red]", border_style="red"))
+            raise typer.Exit(code=1)
 
     dur_min = int(video_meta.duration_seconds // 60)
     dur_sec = int(video_meta.duration_seconds % 60)
@@ -1722,13 +1778,13 @@ def cuts(
         border_style="green",
     ))
 
-    if not questionary.confirm("Prosseguir com este vídeo?", default=True).ask():
+    if not yes and not questionary.confirm("Prosseguir com este vídeo?", default=True).ask():
         _console.print("Operação cancelada.")
         raise typer.Exit(code=0)
 
     # RF-10/11: campo opcional de max_clips
     resolved_max_clips = max_clips
-    if resolved_max_clips is None:
+    if resolved_max_clips is None and not yes:
         mc_input = questionary.text(
             "Número máximo de clipes (Enter para deixar a IA decidir):",
             default="",
@@ -1799,4 +1855,6 @@ def cuts(
             upload=upload,
             platforms=selected_platforms,
             auth_config=auth_config,
+            music=music,
+            music_mood=music_mood,
         )

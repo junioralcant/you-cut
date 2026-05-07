@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 
 from youcut.exporter import export_metadata
-from youcut.models import ViralClip
+from youcut.models import MusicTrack, ViralClip
 
 
 @pytest.fixture
@@ -145,3 +145,41 @@ def test_viral_score_format(tmp_path):
     result = export_metadata(clip, index=0, output_dir=tmp_path)
     content = result.read_text(encoding="utf-8")
     assert "7.3/10" in content
+
+
+def test_export_metadata_with_music_track(sample_clip, tmp_path):
+    """clip_NN.txt com MusicTrack preenchido deve conter seção TRILHA SONORA."""
+    track = MusicTrack(
+        name="Upbeat Morning",
+        pixabay_url="https://pixabay.com/music/upbeat-morning-123/",
+        local_path=tmp_path / "track.mp3",
+        mood="motivacional",
+        duration_s=120.0,
+    )
+    result = export_metadata(sample_clip, index=0, output_dir=tmp_path, music_track=track)
+    content = result.read_text(encoding="utf-8")
+
+    assert "TRILHA SONORA" in content
+    assert "Upbeat Morning" in content
+    assert "https://pixabay.com/music/upbeat-morning-123/" in content
+
+
+def test_export_metadata_without_music_track(sample_clip, tmp_path):
+    """clip_NN.txt sem MusicTrack não deve conter seção TRILHA SONORA."""
+    result = export_metadata(sample_clip, index=0, output_dir=tmp_path, music_track=None)
+    content = result.read_text(encoding="utf-8")
+
+    assert "TRILHA SONORA" not in content
+    # Conteúdo original deve estar presente (sem regressão)
+    assert sample_clip.title in content
+    assert sample_clip.description in content
+
+
+def test_export_metadata_existing_tests_still_pass(sample_clip, tmp_path):
+    """Verificar que a assinatura com music_track=None é retrocompatível."""
+    # Chamada sem o parâmetro music_track (omitido) deve funcionar igual
+    result = export_metadata(sample_clip, index=0, output_dir=tmp_path)
+    content = result.read_text(encoding="utf-8")
+
+    assert sample_clip.title in content
+    assert "TRILHA SONORA" not in content

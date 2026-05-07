@@ -33,6 +33,16 @@ class VideoMetadata(BaseModel):
     url: str
 
 
+class MusicTrack(BaseModel):
+    """Faixa musical CC0 obtida da Pixabay e usada na mixagem do clipe social."""
+
+    name: str
+    pixabay_url: str
+    local_path: Path
+    mood: str
+    duration_s: float
+
+
 class ClipRecord(BaseModel):
     title: str
     start_time: float
@@ -47,6 +57,7 @@ class ClipRecord(BaseModel):
     upload_status: dict[str, str] = {}
     captions_applied: bool = True
     caption_warning: str | None = None
+    music_track: MusicTrack | None = None
 
 
 class SessionData(BaseModel):
