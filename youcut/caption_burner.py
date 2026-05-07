@@ -99,19 +99,37 @@ class CaptionBurner:
         return srt_path
 
     def _ffmpeg_burn(self, video_path: Path, srt_path: Path, layout_mode: str | None = None) -> Path:
-        out_path = video_path.with_stem(video_path.stem + "_captioned")
-        width, height = self._probe_video_dimensions(video_path)
+        from youcut.captioner import _ASS_HEADER, _WORD_STYLE, _PHRASE_STYLE, _format_ass_time, _escape_ass
 
-        with tempfile.NamedTemporaryFile(suffix=".srt", delete=False, dir=tempfile.gettempdir()) as tmp:
-            safe_srt = Path(tmp.name)
-        safe_srt.write_bytes(srt_path.read_bytes())
+        out_path = video_path.with_stem(video_path.stem + "_captioned")
+
+        # Converte SRT → ASS (mais robusto com ffmpeg -vf ass=)
+        words = []
+        for line in srt_path.read_text(encoding="utf-8").strip().split("\n\n"):
+            parts = line.strip().split("\n")
+            if len(parts) < 3:
+                continue
+            try:
+                times = parts[1].split(" --> ")
+                start_s = self._srt_time_to_seconds(times[0].strip())
+                end_s = self._srt_time_to_seconds(times[1].strip())
+                text = _escape_ass(" ".join(parts[2:]).strip())
+                words.append(f"Dialogue: 0,{_format_ass_time(start_s)},{_format_ass_time(end_s)},Default,,0,0,0,,{text}")
+            except Exception:
+                continue
+
+        style = _PHRASE_STYLE if layout_mode == "bottom_panel" else _WORD_STYLE
+        ass_content = _ASS_HEADER.format(res_x=1080, res_y=1920, style=style) + "\n".join(words) + "\n"
+
+        with tempfile.NamedTemporaryFile(suffix=".ass", delete=False, dir=tempfile.gettempdir(), mode="w", encoding="utf-8") as tmp:
+            tmp.write(ass_content)
+            safe_ass = Path(tmp.name)
 
         try:
-            force_style = _SRT_FORCE_STYLE_BOTTOM_PANEL if layout_mode == "bottom_panel" else _SRT_FORCE_STYLE
             cmd = [
                 "ffmpeg",
                 "-i", str(video_path),
-                "-vf", f"subtitles={safe_srt}:original_size={width}x{height}:force_style='{force_style}'",
+                "-vf", f"ass={safe_ass}",
                 "-c:v", "libx264",
                 "-c:a", "aac",
                 "-y",
@@ -119,9 +137,14 @@ class CaptionBurner:
             ]
             subprocess.run(cmd, check=True, capture_output=True)
         finally:
-            safe_srt.unlink(missing_ok=True)
+            safe_ass.unlink(missing_ok=True)
 
         return out_path
+
+    def _srt_time_to_seconds(self, t: str) -> float:
+        t = t.replace(",", ".")
+        h, m, s = t.split(":")
+        return int(h) * 3600 + int(m) * 60 + float(s)
 
     def _probe_video_dimensions(self, video_path: Path) -> tuple[int, int]:
         cmd = [

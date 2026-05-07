@@ -63,18 +63,13 @@ class MusicMixer:
 
     def _build_filter_graph(self, clip_dur: float, config: PipelineConfig) -> str:
         fade_start = max(0.0, clip_dur - 2.0)
+        # Música em volume fixo sobre o áudio original sem alterar a voz
         return (
-            f"[0:a]asplit=2[voice][sc];"
             f"[1:a]aloop=loop=-1:size=2000000000,"
             f"atrim=0:{clip_dur},"
-            f"afade=t=out:st={fade_start}:d=2[music_loop];"
-            f"[music_loop]volume={config.music_volume}[music_vol];"
-            f"[music_vol][sc]sidechaincompress="
-            f"threshold={config.music_duck_threshold}:"
-            f"ratio={config.music_duck_ratio}:"
-            f"attack={config.music_duck_attack_ms}:"
-            f"release={config.music_duck_release_ms}[music_ducked];"
-            f"[voice][music_ducked]amix=inputs=2:duration=first[aout]"
+            f"afade=t=out:st={fade_start}:d=2,"
+            f"volume={config.music_volume}[music];"
+            f"[0:a][music]amix=inputs=2:duration=first:normalize=0[aout]"
         )
 
     def _get_clip_duration(self, clip_path: Path) -> float:

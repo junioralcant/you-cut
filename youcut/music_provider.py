@@ -53,12 +53,12 @@ _MOOD_KEYWORDS: dict[str, list[str]] = {
 
 # Tags Jamendo por mood (tentadas em ordem até encontrar resultado)
 _MOOD_TAGS: dict[str, list[str]] = {
-    "motivacional": ["motivational", "uplifting", "inspiring", "positive"],
-    "reflexivo": ["relaxing", "calm", "ambient", "peaceful"],
-    "energico": ["energetic", "upbeat", "electronic", "dance"],
-    "emocional": ["emotional", "sentimental", "melancholic"],
-    "feliz": ["happy", "joyful", "fun", "cheerful"],
-    "dramatico": ["dramatic", "epic", "cinematic", "intense"],
+    "motivacional": ["cinematic", "epic", "orchestral", "uplifting", "inspiring"],
+    "reflexivo": ["cinematic", "piano", "atmospheric", "melancholic", "ambient"],
+    "energico": ["energetic", "action", "electronic", "intense", "upbeat"],
+    "emocional": ["emotional", "piano", "cinematic", "strings", "melancholic"],
+    "feliz": ["acoustic", "indie", "pop", "fun", "upbeat"],
+    "dramatico": ["cinematic", "orchestral", "dramatic", "epic", "tension"],
 }
 
 _MUSIC_CACHE_DIR = Path.home() / ".youcut" / "music"
