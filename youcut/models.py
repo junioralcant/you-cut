@@ -1,4 +1,5 @@
 from datetime import datetime
+from enum import Enum
 from pathlib import Path
 from typing import Literal
 
@@ -231,3 +232,104 @@ class ComicMetadata(BaseModel):
     tiktok: PlatformMetadata
     instagram_reels: PlatformMetadata
     youtube_shorts: PlatformMetadata
+
+
+class MouthShape(str, Enum):
+    CLOSED = "closed"
+    OPEN_MID = "open_mid"
+    OPEN_WIDE = "open_wide"
+    OPEN_ROUND = "open_round"
+
+
+class MouthSheet(BaseModel):
+    character_id: str
+    sheet_path: Path
+    cells: dict[MouthShape, tuple[int, int, int, int]]
+
+    @field_validator("cells")
+    @classmethod
+    def validate_cells_required_shapes(
+        cls, v: dict[MouthShape, tuple[int, int, int, int]]
+    ) -> dict[MouthShape, tuple[int, int, int, int]]:
+        required = {MouthShape.CLOSED, MouthShape.OPEN_MID, MouthShape.OPEN_WIDE}
+        missing = required - set(v.keys())
+        if missing:
+            raise ValueError(
+                f"MouthSheet.cells deve conter ao menos {sorted(s.value for s in required)}; "
+                f"faltando: {sorted(s.value for s in missing)}"
+            )
+        for shape, box in v.items():
+            if len(box) != 4:
+                raise ValueError(
+                    f"MouthSheet.cells[{shape.value}] deve ser tupla (x1, y1, x2, y2); recebido {box}"
+                )
+            x1, y1, x2, y2 = box
+            if x2 <= x1 or y2 <= y1:
+                raise ValueError(
+                    f"MouthSheet.cells[{shape.value}] deve satisfazer x2>x1 e y2>y1; recebido {box}"
+                )
+        return v
+
+
+class MouthEvent(BaseModel):
+    character_id: str
+    start_sec: float
+    end_sec: float
+    shape: MouthShape
+
+    @field_validator("end_sec")
+    @classmethod
+    def validate_end_after_start(cls, v: float, info) -> float:
+        start = info.data.get("start_sec")
+        if start is not None and v < start:
+            raise ValueError(
+                f"end_sec ({v}) não pode ser menor que start_sec ({start})"
+            )
+        return v
+
+
+class RemotionScene(BaseModel):
+    index: int
+    start_sec: float
+    end_sec: float
+    character_ids: list[str]
+    speaker_id: str | None = None
+    ken_burns: dict = {}
+    transition_in: Literal["cut", "crossfade", "wipe"] = "crossfade"
+    shakes: list[dict] = []
+    lip_sync: list[MouthEvent] = []
+
+    @field_validator("end_sec")
+    @classmethod
+    def validate_end_after_start(cls, v: float, info) -> float:
+        start = info.data.get("start_sec")
+        if start is not None and v <= start:
+            raise ValueError(
+                f"end_sec ({v}) deve ser maior que start_sec ({start})"
+            )
+        return v
+
+
+class RemotionInputProps(BaseModel):
+    audio_path: str
+    duration_sec: float
+    fps: int = 30
+    width: int = 1080
+    height: int = 1920
+    characters: dict[str, dict] = {}
+    scenes: list[RemotionScene] = []
+    background_color: str = "#000000"
+
+    @field_validator("duration_sec")
+    @classmethod
+    def validate_duration_positive(cls, v: float) -> float:
+        if v <= 0:
+            raise ValueError(f"duration_sec deve ser positivo, recebido {v}")
+        return v
+
+    @field_validator("fps")
+    @classmethod
+    def validate_fps_positive(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError(f"fps deve ser positivo, recebido {v}")
+        return v

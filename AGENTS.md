@@ -49,17 +49,20 @@ Flags relevantes: `--max-clips/-n`, `--skip-review`, `--upload`, `--platforms`, 
 Gerencia tokens OAuth de YouTube / Instagram / TikTok, salvos em `~/.youcut/credentials/<plataforma>.json`.
 
 ### `youcut comic <video>`
-Pipeline **motion comic**: aceita um vídeo local curto (≤120 s) e gera um MP4 9:16 (1080×1920) com personagens ilustrados, áudio original preservado e legendas queimadas. Suporta 3 engines de animação (via `--engine`):
+Pipeline **motion comic**: aceita um vídeo local curto (≤120 s) e gera um MP4 9:16 (1080×1920) com personagens ilustrados, áudio original preservado e legendas queimadas. Suporta 4 engines de animação (via `--engine`):
 
 - **`scenes`** (default, recomendado) — divide a transcrição em N cenas narrativas (Claude scene planner), gera 1 master por cena com **anchor visual canônico** pra consistência de estilo, faz **word-level visual attribution** (Claude vision identifica quem articula a boca em cada palavra), aplica **smoothing conservador** das atribuições, **gap absorption** (laughs/expressões não-fala não viram freeze) e **crossfade** entre chunks. Emite versões com e sem legenda + watermark configurável (`comic_scenes_watermark_text`). Implementação em `youcut/comic/scenes_pipeline.py`.
 - **`prunaai`** — gera o vídeo inteiro em 1 chamada à IA (`prunaai/p-video-avatar`). Mais barato (~$0.05/vídeo) e mais rápido (~70s), mas sem controle narrativo nem lip-sync correto em diálogos.
 - **`panels`** — modo clássico (Hailuo i2v por painel). Mais caro e demorado mas com máximo controle por beat.
+- **`remotion`** — render local programático via Node.js + React/TSX (Remotion 4.x). IA usada apenas para gerar anchors e uma **mouth sheet 4-em-1** por personagem (~$0.04 cada chamada `gpt-image-1`); a animação (lip-sync sílaba-level via `pyphen`, Ken Burns, transições crossfade/cut/wipe, idle blink/breathe, shake) executa em código local sem chamadas pagas adicionais. Custo por vídeo ≤ $1, determinístico, suporta modo preview interativo via Remotion Studio (`--no-preview` força headless; `--yes/-y` também implica `--no-preview`). Implementação em `youcut/comic/remotion_pipeline.py`.
 
-Flags relevantes: `--engine {scenes,prunaai,panels}`, `--max-panels/-n`, `--cost-cap`, `--dry-run`, `--session <id>`, `--regenerate-panel I[,J,...]`, `--yes/-y`, `--no-progress`.
+Flags relevantes: `--engine {scenes,prunaai,panels,remotion}`, `--max-panels/-n`, `--cost-cap`, `--dry-run`, `--session <id>`, `--regenerate-panel I[,J,...]`, `--yes/-y`, `--no-progress`, `--no-preview` (engine `remotion`).
 
 Configs específicas do `scenes` (em `PipelineConfig`): `comic_scenes_count` (default 4), `comic_scenes_crossfade_dur` (0.25s), `comic_scenes_gap_absorb_threshold` (0.5s), `comic_scenes_smooth_attribution` (True), `comic_scenes_inter_call_pause_s` (11s para rate-limit Replicate), `comic_scenes_watermark_text`, `comic_scenes_emit_no_subs_version`, `comic_scenes_style_ref_image`.
 
-Variáveis adicionais: `RUNWAY_API_KEY` (obrigatória pro engine `panels`), `REPLICATE_API_TOKEN` (obrigatória pros engines `prunaai` e `scenes`), `OPENAI_API_KEY` (obrigatória para o `comic`).
+Configs específicas do `remotion` (em `PipelineConfig`): `comic_remotion_fps` (30), `comic_remotion_node_bin` (`node`), `comic_remotion_concurrency` (None), `comic_remotion_studio_port` (3000), `comic_remotion_kenburns_default_scale` (1.12), `comic_remotion_idle_blink_period_sec` (4.5), `comic_remotion_pyphen_locale_fallback` (`pt_BR`). Reutiliza as chaves de watermark do engine `scenes` (`comic_scenes_watermark_text`/`opacity`/`y_from_bottom`).
+
+Variáveis adicionais: `RUNWAY_API_KEY` (obrigatória pro engine `panels`), `REPLICATE_API_TOKEN` (obrigatória pros engines `prunaai` e `scenes`), `OPENAI_API_KEY` (obrigatória para todos os engines do `comic`). O engine `remotion` requer **Node.js ≥ 20** instalado no PATH (não há chave de API adicional).
 
 ---
 
@@ -102,6 +105,18 @@ Variáveis adicionais: `RUNWAY_API_KEY` (obrigatória pro engine `panels`), `REP
 8. **Panel renderer** (`comic/panel_renderer.py`) — para cada painel: imagem-base 9:16 (gpt-image-1) com fichas-âncora como `reference_images` → mini-clipe 2–5 s (Runway `gen4_turbo`, ratio `720:1280`) → fallback estático via `ffmpeg -loop 1` quando i2v falha. Paralelismo via `asyncio.Semaphore(comic_i2v_concurrency)`.
 9. **Composer** (`comic/composer.py`) — extend (`tpad=stop_mode=clone`) ou trim por painel → concat demuxer → mux do áudio original com `-c:a copy` → queima legendas palavra-a-palavra reusando `youcut.captioner.build_ass_for_words`.
 10. **Sessão e relatório** (`comic/session.py`, `comic/run_report.py`) — persistência em `~/.youcut/sessions/<id>.json` (discriminada por `cast`+`panels`) e métricas em `output/<video>/comic/run_report.json` (`schema_version=1`).
+
+### 3.4 Pipeline `youcut comic --engine remotion` (render local programático)
+1. **Validação + transcrição + diarização + cast** — reusa o stack do pipeline `comic` (passos 1–4 acima).
+2. **Cost estimator + cap** (`comic/cost_estimator.py`) — branch dedicado: custo = `n_cast × (anchor_image_usd + mouth_sheet_usd)`, render local = $0. Cap respeitado normalmente (`comic_cost_cap_usd`).
+3. **Cast anchors** (`comic/cast_builder.py`) — gera ficha-âncora 1024×1024 por personagem (uma única chamada `gpt-image-1`, idempotente).
+4. **Mouth sheets** (`comic/mouth_shapes.py`) — para cada personagem, **uma chamada `gpt-image-1`** gera uma sheet 1024×1024 com 4 mouth shapes em grid 2×2 (closed/open_mid/open_wide/open_round). Validador Pillow + retry com prompt corretivo + fallback (4 chamadas separadas) em caso de falha. Cells nativas 512×512.
+5. **Syllable mapper** (`comic/syllable_mapper.py`) — função pura: `WordTimestamp[]` → `MouthEvent[]`. Hifeniza cada palavra via `pyphen` (locale derivado da transcrição), distribui o tempo proporcionalmente entre as sílabas, mapeia a vogal dominante (a/á/â/ã/e/é/ê → `OPEN_WIDE`; i/í/y → `OPEN_MID`; o/ó/ô/õ/u/ú → `OPEN_ROUND`; consoante terminal → `CLOSED`). Smoothing: sílabas < 80ms são fundidas com a vizinha mais curta. Gaps > 120ms entre palavras viram `CLOSED`.
+6. **Render Remotion** (`comic/providers/remotion_renderer.py` + `comic/remotion_project/`) — Python serializa `RemotionInputProps` (com cenas, lipsync por scene, mouth sheets) em JSON e invoca `node render.mjs --props ... --out ...` por subprocess. O projeto vendored em TypeScript usa Remotion 4.x (`<Composition>` + `<Sequence>` por cena + `<AbsoluteFill>` + `<Audio>`); cada `Scene.tsx` aplica Ken Burns via `interpolate(frame, [0,N], [scaleFrom,scaleTo])` + transitionIn (`crossfade` opacity, `cut`, `wipe` clipPath); `Character.tsx` lê `lipSync` e exibe a célula correta da mouth sheet via `backgroundImage`+`backgroundPosition`; `Shake.tsx` aplica `transform: translate` por janelas. Progress emitido como JSON-lines em stdout.
+7. **Composer single-clip** (`comic/composer.compose_from_single_clip`) — recebe o MP4 do Remotion e emite duas versões: `motion_comic_no_subs.mp4` (stream-copy) e `motion_comic.mp4` (legendas word-by-word + watermark queimados via ffmpeg). Reusa `build_ass_for_words` e o filter `drawtext` do engine `scenes`.
+8. **Sessão** — `MotionComicSession` persistida em `~/.youcut/sessions/<id>.json`.
+
+Health-checks específicos: `RemotionRenderer` valida `node --version ≥ 20` e roda `npm install` automático no `remotion_project/` quando `node_modules/` ausente. Em ambiente sem TTY/DISPLAY, o orquestrador (`comic/remotion_pipeline.py`) cai automaticamente para modo headless (RF-18).
 
 ---
 
@@ -146,12 +161,31 @@ youcut/
     script_planner.py     Claude texto → list[Panel] (cadência ≥1/5s)
     panel_renderer.py     gpt-image-1 + Runway gen4_turbo + fallback
     composer.py           concat + audio mux + legendas word-by-word
-    cost_estimator.py     PriceTable + enforce_cap pt-BR
+                          + helper compose_from_single_clip (engine remotion)
+    cost_estimator.py     PriceTable + enforce_cap pt-BR (branches por engine)
     session.py            save/load/list MotionComicSession
     run_report.py         run_report.json (schema_version=1)
+    mouth_shapes.py       gpt-image-1 sheet 4-em-1 + Pillow crop (engine remotion)
+    syllable_mapper.py    pyphen + heurística vogal→MouthShape (engine remotion)
+    remotion_pipeline.py  orquestrador do engine `--engine remotion`
     providers/
       images.py           OpenAIImageProvider (gpt-image-1)
       i2v.py              RunwayProvider (gen4_turbo)
+      remotion_renderer.py wrapper subprocess Node + Studio launcher
+    remotion_project/     projeto Remotion vendored (Node + React + TS)
+      package.json        deps fixadas em Remotion 4.0.420 + React 19.2
+      tsconfig.json       strict, ES2022, react-jsx, Bundler resolution
+      remotion.config.ts  codec h264, pixelFormat yuv420p
+      render.mjs          entrypoint Node CLI (bundle + selectComposition + renderMedia)
+      src/
+        index.ts          registerRoot(RemotionRoot)
+        Root.tsx          <Composition id="ComicVideo" calculateMetadata=...>
+        types.ts          espelho TS de RemotionInputProps Pydantic
+        ComicVideo.tsx    AbsoluteFill + Audio + map de Scenes
+        components/
+          Scene.tsx       Ken Burns + transitionIn + Shake wrapper
+          Character.tsx   lip-sync via mouth sheet cell + blink + breathe
+          Shake.tsx       translate sinusoidal por janelas de impacto
 
   uploader/
     __init__.py           orquestra upload_clips() multi-plataforma
@@ -221,6 +255,14 @@ Cada plataforma implementa a interface `Uploader` (`base.py`):
 | `social_layout_*`                  | vários                   | controla altura da imagem topo, banda do título, paleta |
 | `openai_api_key`                   | `None`                   | obrigatório para gerar thumbnail/imagem social via DALL·E 3 |
 | `session_timeout_minutes`          | `7`                      | timeout de inatividade no card de oferta do Fluxo B |
+| `comic_animation_engine`           | `scenes`                 | `scenes` (default), `prunaai`, `panels`, `remotion` |
+| `comic_remotion_fps`               | `30`                     | fps da composição Remotion |
+| `comic_remotion_node_bin`          | `node`                   | path do binário Node usado pelo subprocess |
+| `comic_remotion_concurrency`       | `None`                   | threads de CPU para `renderMedia` (Remotion default) |
+| `comic_remotion_studio_port`       | `3000`                   | porta do Remotion Studio em modo preview |
+| `comic_remotion_kenburns_default_scale` | `1.12`              | escala alvo do Ken Burns aplicado por cena |
+| `comic_remotion_idle_blink_period_sec`  | `4.5`               | periodicidade do idle blink do personagem |
+| `comic_remotion_pyphen_locale_fallback` | `pt_BR`             | locale `pyphen` quando o idioma da transcrição é desconhecido |
 
 ### Variáveis de ambiente extras (não em `PipelineConfig`)
 - `YOUTUBE_CLIENT_SECRETS_FILE` — caminho do `client_secrets.json`
@@ -290,7 +332,7 @@ Comando: `pytest` (instale com `pip install -e .[dev]`).
 ## 11. Dependências (de `pyproject.toml`)
 
 **Core:**
-`typer`, `rich`, `pydantic>=2`, `pydantic-settings`, `anthropic>=0.40`, `faster-whisper`, `yt-dlp`, `Pillow`, `google-api-python-client`, `google-auth-oauthlib`, `httpx`, `questionary`, `openai`.
+`typer`, `rich`, `pydantic>=2`, `pydantic-settings`, `anthropic>=0.40`, `faster-whisper`, `yt-dlp`, `Pillow`, `google-api-python-client`, `google-auth-oauthlib`, `httpx`, `questionary`, `openai`, `pyphen>=0.14` (hifenização para o engine `remotion`).
 
 **Extras:**
 - `whisper-openai`: `openai-whisper` como fallback de transcrição.
@@ -300,6 +342,7 @@ Comando: `pytest` (instale com `pip install -e .[dev]`).
 **Externo (não-Python):**
 - `ffmpeg 8.1+` com `--enable-libass` (no Homebrew, pelo tap `homebrew-ffmpeg/ffmpeg`).
 - Opcional: `node` no PATH para `YOUCUT_YTDLP_JS_RUNTIMES=node`.
+- **`Node.js ≥ 20`** no PATH para o engine `youcut comic --engine remotion` (instalar via `brew install node` ou nvm). O projeto Remotion vendored em `youcut/comic/remotion_project/` instala suas próprias deps via `npm install` na primeira execução (~50 MB de `node_modules`, lockfile commitado para reprodutibilidade).
 
 ---
 

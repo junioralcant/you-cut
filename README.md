@@ -65,6 +65,24 @@ Se quiser rodar os testes:
 pip install -e .[dev]
 ```
 
+### Node.js ≥ 20 (apenas para `youcut comic --engine remotion`)
+
+O engine `remotion` (render local programático para motion comics) exige Node.js no PATH. Instale via Homebrew (macOS), `nvm` ou direto do site oficial:
+
+```bash
+# macOS
+brew install node
+
+# Linux/macOS via nvm
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.0/install.sh | bash
+nvm install 20
+
+# Verifique a versão (deve ser ≥ 20)
+node --version
+```
+
+Os outros engines (`scenes`, `prunaai`, `panels`) **não exigem** Node.js. As dependências npm do projeto Remotion vendored (`youcut/comic/remotion_project/`) são instaladas automaticamente via `npm install` na primeira execução do engine (~50 MB de `node_modules`). O `package-lock.json` é commitado para reprodutibilidade.
+
 ## Configuração
 
 Crie um arquivo `.env` na raiz do projeto com base no `.env.example`:
@@ -327,6 +345,18 @@ Saída em `output/<nome_do_video>/`:
 | **`scenes`** (default, recomendado) | Diálogos, comédia, narrativa multi-cena. Lip-sync correto via Claude vision word-level. | ~$0.50–1.00 | ~10–15 min |
 | `prunaai` | Monólogo simples ou cena única, sem narrativa. | ~$0.10 | ~5 min |
 | `panels` | Máximo controle por beat, vídeos longos com muitas trocas. | ~$2.00 | ~20–30 min |
+| `remotion` | Custo ≤ $1, **lip-sync sílaba-level**, render local determinístico, modo preview interativo. **Exige Node.js ≥ 20.** | ≤ $1.00 | ~5–10 min |
+
+```bash
+# Modo interativo (abre Remotion Studio para preview antes do render)
+youcut comic ./meu_video.mp4 --engine remotion
+
+# Modo headless (CI / batch — também acionado por --yes/-y)
+youcut comic ./meu_video.mp4 --engine remotion --no-preview
+
+# Dry-run (estima custo e termina)
+youcut comic ./meu_video.mp4 --engine remotion --dry-run
+```
 
 ### Engine `scenes` — como funciona
 

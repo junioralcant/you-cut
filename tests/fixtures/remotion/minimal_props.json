@@ -1,0 +1,10 @@
+{
+  "audio_path": "minimal_audio.aac",
+  "duration_sec": 2.0,
+  "fps": 30,
+  "width": 1080,
+  "height": 1920,
+  "characters": {},
+  "scenes": [],
+  "background_color": "#101820"
+}

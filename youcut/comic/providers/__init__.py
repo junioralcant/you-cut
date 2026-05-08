@@ -15,6 +15,12 @@ from youcut.comic.providers.images import (
     ImageProvider,
     OpenAIImageProvider,
 )
+from youcut.comic.providers.remotion_renderer import (
+    NodeNotFoundError,
+    RemotionDepsInstallError,
+    RemotionRenderError,
+    RemotionRenderer,
+)
 
 __all__ = [
     "ImageProvider",
@@ -23,4 +29,8 @@ __all__ = [
     "ImageToVideoProvider",
     "RunwayProvider",
     "I2VGenerationError",
+    "RemotionRenderer",
+    "RemotionRenderError",
+    "NodeNotFoundError",
+    "RemotionDepsInstallError",
 ]

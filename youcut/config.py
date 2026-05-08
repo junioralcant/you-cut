@@ -76,7 +76,16 @@ class PipelineConfig(BaseSettings):
     comic_output_width: int = 1080
     comic_output_height: int = 1920
     comic_generate_metadata: bool = True
-    comic_animation_engine: Literal["prunaai", "panels", "scenes"] = "scenes"
+    comic_animation_engine: Literal["prunaai", "panels", "scenes", "remotion"] = "scenes"
+    # ── Engine "remotion" — render local programático com lip-sync sílaba-level ──
+    comic_remotion_enabled_default: bool = False  # reservado p/ futura promoção a default
+    comic_remotion_fps: int = 30  # fps do <Composition>
+    comic_remotion_node_bin: str = "node"  # path do binário Node a usar
+    comic_remotion_concurrency: int | None = None  # passado p/ renderMedia (CPU threads)
+    comic_remotion_studio_port: int = 3000  # porta do Remotion Studio
+    comic_remotion_kenburns_default_scale: float = 1.12  # escala alvo do Ken Burns
+    comic_remotion_idle_blink_period_sec: float = 4.5  # periodicidade do blink idle
+    comic_remotion_pyphen_locale_fallback: str = "pt_BR"  # locale de fallback p/ pyphen
     # ── Engine "scenes" (default) — narrativa multi-cena + word-level lip-sync ──
     comic_scenes_count: int = 4  # número de cenas narrativas
     comic_scenes_crossfade_dur: float = 0.25  # crossfade entre chunks (s)

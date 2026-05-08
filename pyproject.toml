@@ -21,6 +21,7 @@ dependencies = [
     "httpx>=0.25.0",
     "questionary>=2.0.0",
     "openai>=1.0.0",
+    "pyphen>=0.14",
 ]
 
 [project.optional-dependencies]

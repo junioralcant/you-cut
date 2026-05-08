@@ -17,3 +17,6 @@ prompt.md
 youtube-oauth.json
 cookies.txt
 .claude/settings.local.json
+
+# Remotion vendored project
+youcut/comic/remotion_project/node_modules/

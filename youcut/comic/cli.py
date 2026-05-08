@@ -282,7 +282,16 @@ def comic_command(
             "narrativas com word-level lip-sync via Claude vision (recomendado). "
             "`prunaai` gera o vídeo final em 1 chamada à IA (mais barato mas "
             "sem controle de narrativa). `panels` usa o modo clássico Hailuo "
-            "i2v com N painéis individuais."
+            "i2v com N painéis individuais. `remotion` renderiza local via "
+            "Node + React com lip-sync sílaba-level (custo ≤ $1, determinístico)."
+        ),
+    ),
+    no_preview: bool = typer.Option(
+        False,
+        "--no-preview",
+        help=(
+            "Pula o modo preview do engine `remotion` e vai direto para o "
+            "render headless. `--yes`/`-y` também implica `--no-preview`."
         ),
     ),
 ) -> None:
@@ -317,9 +326,10 @@ def comic_command(
         config_overrides["comic_composition_seed_image"] = composition_image
     if no_metadata:
         config_overrides["comic_generate_metadata"] = False
-    if engine not in ("prunaai", "panels", "scenes"):
+    if engine not in ("prunaai", "panels", "scenes", "remotion"):
         _err_console.print(
-            f"[red]--engine inválido: {engine!r} (use 'scenes', 'prunaai' ou 'panels')[/red]"
+            f"[red]--engine inválido: {engine!r} "
+            "(use 'scenes', 'prunaai', 'panels' ou 'remotion')[/red]"
         )
         raise typer.Exit(code=2)
     config_overrides["comic_animation_engine"] = engine
@@ -338,15 +348,30 @@ def comic_command(
         on_stage=_make_stage_logger(progress=not no_progress),
     )
 
+    # `--yes` implica `--no-preview` para preservar compatibilidade com automação (RF-17).
+    effective_preview = not (no_preview or yes)
+
     try:
-        session = run_comic_pipeline(
-            video,
-            config,
-            session_id=session_id,
-            regenerate_panels=panel_indices or None,
-            dry_run=dry_run,
-            callbacks=callbacks,
-        )
+        if engine == "remotion":
+            from youcut.comic.remotion_pipeline import run_remotion_pipeline
+
+            session = run_remotion_pipeline(
+                video,
+                config,
+                session_id=session_id,
+                callbacks=callbacks,
+                preview=effective_preview,
+                dry_run=dry_run,
+            )
+        else:
+            session = run_comic_pipeline(
+                video,
+                config,
+                session_id=session_id,
+                regenerate_panels=panel_indices or None,
+                dry_run=dry_run,
+                callbacks=callbacks,
+            )
     except ComicPipelineError as exc:
         _err_console.print(f"[red]{exc}[/red]")
         raise typer.Exit(code=1) from exc

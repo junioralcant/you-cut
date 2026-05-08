@@ -141,6 +141,69 @@ class FakeI2VProvider:
             out_path.unlink(missing_ok=True)
 
 
+class FakeRemotionRenderer:
+    """Wrapper Remotion fake — gera MP4 sintético via FFmpeg lavfi.
+
+    Compatível com a interface de `RemotionRenderer.render()` /
+    `open_studio()`. Emite eventos `on_progress` simulados para validar
+    callbacks no orquestrador.
+    """
+
+    def __init__(self, *, color: str = "0x111111", duration_override: float | None = None) -> None:
+        self.color = color
+        self.duration_override = duration_override
+        self.render_calls: list[dict] = []
+        self.studio_calls: list[dict] = []
+
+    def render(
+        self,
+        props,
+        output_path,
+        *,
+        on_progress=None,
+        composition: str = "ComicVideo",
+        timeout: float = 1800.0,
+    ):
+        out_path = Path(output_path)
+        self.render_calls.append(
+            {"props": props, "output_path": out_path, "composition": composition}
+        )
+        duration = self.duration_override or float(props.duration_sec)
+
+        if not _has_ffmpeg():
+            raise RuntimeError("ffmpeg ausente — FakeRemotionRenderer.render exige ffmpeg")
+
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            f"color=c={self.color}:size={props.width}x{props.height}:duration={duration:.3f}",
+            "-f",
+            "lavfi",
+            "-i",
+            f"sine=frequency=440:duration={duration:.3f}",
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "aac",
+            "-shortest",
+            str(out_path),
+        ]
+        subprocess.run(cmd, check=True, capture_output=True)
+        if on_progress:
+            for p in (0.0, 0.5, 1.0):
+                on_progress(p)
+        return out_path
+
+    def open_studio(self, props, *, port: int = 3000, prompt: str = "") -> None:
+        self.studio_calls.append({"props": props, "port": port, "prompt": prompt})
+
+
 def has_ffmpeg() -> bool:
     return _has_ffmpeg()
 

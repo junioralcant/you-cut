@@ -25,6 +25,8 @@ OUTPUT_WIDTH: int = 1080
 OUTPUT_HEIGHT: int = 1920
 DURATION_TOLERANCE_SECONDS: float = 0.2
 DEFAULT_OUTPUT_NAME: str = "motion_comic.mp4"
+DEFAULT_NO_SUBS_NAME: str = "motion_comic_no_subs.mp4"
+WATERMARK_FONT: Path = Path(__file__).resolve().parents[1] / "assets" / "Roboto-Regular.ttf"
 
 
 class ComposerError(Exception):
@@ -356,6 +358,145 @@ def compose(
 
     logger.info("comic.composer: vídeo final em %s (%.2fs)", final_path, final_duration)
     return final_path
+
+
+def _build_watermark_filter(
+    text: str,
+    *,
+    opacity: float,
+    y_from_bottom: int,
+    font_size: int = 44,
+) -> str:
+    """Constrói o filter `drawtext` do watermark padrão (mesmo do engine scenes)."""
+    return (
+        f"drawtext=text='{text}':"
+        f"fontfile={WATERMARK_FONT}:"
+        f"fontsize={font_size}:"
+        f"fontcolor=white@{opacity:.2f}:"
+        f"x=(w-text_w)/2:"
+        f"y=h-{y_from_bottom}:"
+        f"shadowcolor=black@0.6:shadowx=2:shadowy=2"
+    )
+
+
+def compose_from_single_clip(
+    input_video: Path,
+    transcription: TranscriptionResult,
+    output_dir: Path,
+    config: PipelineConfig,
+    *,
+    no_subs_name: str = DEFAULT_NO_SUBS_NAME,
+    with_subs_name: str = DEFAULT_OUTPUT_NAME,
+) -> tuple[Path, Path]:
+    """Compõe duas versões finais a partir de um único clipe pré-renderizado.
+
+    Caminho mais simples para o engine `remotion`, que entrega 1 MP4 (não há
+    painéis a concatenar). Reusa `build_ass_for_words` para legendas
+    word-by-word e `_build_watermark_filter` para watermark configurável
+    via `comic_scenes_watermark_*` (paridade com o engine scenes).
+
+    Args:
+        input_video: MP4 produzido pelo Remotion (já 1080×1920, com áudio).
+        transcription: transcrição word-level (Whisper).
+        output_dir: raiz do output (`output/<video>/`).
+        config: PipelineConfig (lê watermark_text/opacity/y_from_bottom).
+
+    Returns:
+        Tupla `(no_subs_path, with_subs_path)`. Ambos os MP4s são gravados
+        em `output_dir/comic/`.
+    """
+    input_video = Path(input_video)
+    output_dir = Path(output_dir)
+    comic_dir = output_dir / "comic"
+    comic_dir.mkdir(parents=True, exist_ok=True)
+    work_dir = comic_dir / "_compose"
+    work_dir.mkdir(parents=True, exist_ok=True)
+
+    no_subs_path = comic_dir / no_subs_name
+    with_subs_path = comic_dir / with_subs_name
+
+    # 1) Versão sem legendas: re-mux leve (cópia stream-copy do input).
+    no_subs_cmd = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(input_video),
+        "-c",
+        "copy",
+        str(no_subs_path),
+    ]
+    _run_ffmpeg(no_subs_cmd)
+
+    # 2) ASS word-by-word
+    output_width = getattr(config, "comic_output_width", OUTPUT_WIDTH)
+    output_height = getattr(config, "comic_output_height", OUTPUT_HEIGHT)
+    audio_duration = (
+        transcription.segments[-1].end if transcription.segments else 0.0
+    )
+    words = _filter_words_in_range(transcription, 0.0, audio_duration + 1.0)
+    ass_doc = build_ass_for_words(
+        words, output_size=(output_width, output_height), offset=0.0
+    )
+    ass_path = work_dir / "captions.ass"
+    ass_path.write_text(ass_doc, encoding="utf-8")
+
+    # 3) Versão com legendas + watermark.
+    filter_parts = [f"ass={ass_path}"]
+    watermark_text = getattr(config, "comic_scenes_watermark_text", None)
+    if watermark_text:
+        filter_parts.append(
+            _build_watermark_filter(
+                watermark_text,
+                opacity=getattr(config, "comic_scenes_watermark_opacity", 0.4),
+                y_from_bottom=getattr(
+                    config, "comic_scenes_watermark_y_from_bottom", 280
+                ),
+            )
+        )
+    burn_cmd = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(input_video),
+        "-vf",
+        ",".join(filter_parts),
+        "-c:v",
+        "libx264",
+        "-preset",
+        "medium",
+        "-crf",
+        "23",
+        "-pix_fmt",
+        "yuv420p",
+        "-c:a",
+        "copy",
+        str(with_subs_path),
+    ]
+    _run_ffmpeg(burn_cmd)
+
+    # 4) Validação de duração — drift <= DURATION_TOLERANCE_SECONDS contra o input.
+    input_duration = _ffprobe_duration(input_video)
+    for tag, path in (("no_subs", no_subs_path), ("with_subs", with_subs_path)):
+        actual = _ffprobe_duration(path)
+        delta = abs(actual - input_duration)
+        if delta > DURATION_TOLERANCE_SECONDS:
+            logger.warning(
+                "comic.composer.from_single_clip: %s duração %.2fs difere do input "
+                "(%.2fs) em %.2fs (tol %.2f)",
+                tag,
+                actual,
+                input_duration,
+                delta,
+                DURATION_TOLERANCE_SECONDS,
+            )
+
+    logger.info(
+        "comic.composer.from_single_clip: %s e %s emitidos em %s",
+        no_subs_path.name,
+        with_subs_path.name,
+        comic_dir,
+    )
+    return no_subs_path, with_subs_path
 
 
 def compose_single_video(
