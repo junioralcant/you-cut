@@ -17,9 +17,11 @@ class MusicMixer:
     Regra única (não configurável por execução):
     - Skip dos primeiros 10s da música (RF-16);
     - Fade-in 1.0s e fade-out 1.2s (RF-17/18);
-    - Voz original em volume integral (RF-19);
-    - Música a 55% (RF-20);
-    - Limitador final em 0.97 (RF-21).
+    - Voz original em volume integral (RF-19) — sidechain ducking abaixa a
+      música automaticamente quando há voz, então o limitador raramente atua
+      sobre o sinal vocal;
+    - Música a 55% nos silêncios da voz (RF-20);
+    - Limitador final em 0.97 como rede de segurança (RF-21).
     """
 
     def mix(self, clip_path: Path, track: MusicTrack) -> Path:
@@ -73,9 +75,16 @@ class MusicMixer:
         return clip_path
 
     def _build_filter_graph(self, clip_dur: float) -> str:
-        """Filter graph fixo conforme techspec §Filter Graph (RF-16 a RF-21)."""
+        """Filter graph fixo conforme techspec §Filter Graph (RF-16 a RF-21).
+
+        A voz é duplicada (asplit): uma cópia entra no mix final em volume
+        integral, a outra atua como gatilho de ducking sobre a música via
+        sidechaincompress. Isso preserva a inteligibilidade da voz mesmo
+        com música ao fundo.
+        """
         fade_out_start = max(0.0, clip_dur - 1.2)
         return (
+            "[0:a]asplit=2[voice][voice_sc];"
             "[1:a]"
             "atrim=start=10,asetpts=PTS-STARTPTS,"
             "apad,"
@@ -84,7 +93,10 @@ class MusicMixer:
             f"afade=t=out:st={fade_out_start}:d=1.2,"
             "volume=0.55"
             "[m];"
-            "[0:a][m]amix=inputs=2:duration=first:normalize=0,"
+            "[m][voice_sc]"
+            "sidechaincompress=threshold=0.05:ratio=8:attack=5:release=250"
+            "[m_ducked];"
+            "[voice][m_ducked]amix=inputs=2:duration=first:normalize=0,"
             "alimiter=limit=0.97"
             "[aout]"
         )

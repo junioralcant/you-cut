@@ -53,7 +53,7 @@ Sincroniza, sob comando manual, uma playlist curada do YouTube com o acervo loca
 
 Flags relevantes: `--playlist URL` (default vem de `youtube_music_playlist_url`), `--dry-run`.
 
-`youcut cuts ... --music` (modo `social`) reusa o acervo local: escolhe uma faixa com `mood` igual ao do clipe (heurística keywords pt-BR já existente), com fallback global e seleção determinística via SHA-256 sobre `title+reason+social_visual_style`. A mixagem é regra fixa de produto: skip 10s, fade-in 1.0s, fade-out 1.2s, voz integral, música 55%, limitador 0.97 — implementada em `youcut/music/mixer.py` sem dependência de `PipelineConfig`.
+`youcut cuts ... --music` (modo `social`) reusa o acervo local: escolhe uma faixa com `mood` igual ao do clipe (heurística keywords pt-BR já existente), com fallback global e seleção determinística via SHA-256 sobre `title+reason+social_visual_style`. A mixagem é regra fixa de produto: skip 10s, fade-in 1.0s, fade-out 1.2s, voz integral, música 55% nos silêncios com **sidechain ducking** (música abaixa automaticamente quando há voz via `sidechaincompress threshold=0.05 ratio=8 attack=5 release=250`), limitador 0.97 como rede de segurança — implementada em `youcut/music/mixer.py` sem dependência de `PipelineConfig`.
 
 ### `youcut comic <video>`
 Pipeline **motion comic**: aceita um vídeo local curto (≤120 s) e gera um MP4 9:16 (1080×1920) com personagens ilustrados, áudio original preservado e legendas queimadas. Suporta 4 engines de animação (via `--engine`):
@@ -168,8 +168,8 @@ youcut/
     provider.py           YouTubeMusicProvider: classify_mood (heurística pt-BR) +
                           pick_track determinístico (SHA-256 % N candidates)
     mixer.py              MusicMixer.mix(clip_path, track) — filter graph fixo:
-                          skip 10s, fade-in 1.0s, fade-out 1.2s, voz integral,
-                          música 55%, alimiter=0.97
+                          skip 10s, fade-in 1.0s, fade-out 1.2s, voz integral
+                          + sidechain ducking, música 55%, alimiter=0.97
 
   comic/                  pipeline motion comic (`youcut comic`)
     __init__.py           re-export `run_comic_pipeline`

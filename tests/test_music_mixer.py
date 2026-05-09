@@ -110,6 +110,14 @@ class TestFilterGraph:
         # Heurística: a substring "[0:a]volume=" não deve existir
         assert "[0:a]volume=" not in joined
 
+    def test_contains_sidechain_ducking(self, tmp_path):
+        """RF-19: música abaixa quando há voz via sidechaincompress."""
+        cmd = _capture_cmd(tmp_path)
+        joined = " ".join(cmd)
+        assert "asplit=2[voice][voice_sc]" in joined
+        assert "sidechaincompress=threshold=0.05:ratio=8:attack=5:release=250" in joined
+        assert "[m][voice_sc]" in joined
+
 
 # ── Comandos básicos ────────────────────────────────────────────────────────
 

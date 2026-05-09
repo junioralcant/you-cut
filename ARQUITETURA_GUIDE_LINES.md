@@ -276,7 +276,7 @@
 - **Pipeline:** geração.
 
 #### `youcut/music/mixer.py`
-- **Função:** aplica trilha ao clipe via ffmpeg com filter graph fixo (RF-16 a RF-21): `[1:a] atrim=start=10, asetpts=PTS-STARTPTS, apad, atrim=0:{clip_dur}, afade=t=in:st=0:d=1.0, afade=t=out:st={clip_dur-1.2}:d=1.2, volume=0.55 [m]; [0:a][m] amix=inputs=2:duration=first:normalize=0, alimiter=limit=0.97 [aout]`. Voz `[0:a]` entra no `amix` sem `volume=` (preserva integralidade). `-c:v copy`. Falha do ffmpeg → log ERROR + retorna `clip_path` original. **Não importa `PipelineConfig`** (regra fixa de produto).
+- **Função:** aplica trilha ao clipe via ffmpeg com filter graph fixo (RF-16 a RF-21): `[0:a] asplit=2 [voice][voice_sc]; [1:a] atrim=start=10, asetpts=PTS-STARTPTS, apad, atrim=0:{clip_dur}, afade=t=in:st=0:d=1.0, afade=t=out:st={clip_dur-1.2}:d=1.2, volume=0.55 [m]; [m][voice_sc] sidechaincompress=threshold=0.05:ratio=8:attack=5:release=250 [m_ducked]; [voice][m_ducked] amix=inputs=2:duration=first:normalize=0, alimiter=limit=0.97 [aout]`. Voz `[0:a]` é duplicada via `asplit`: uma cópia entra no `amix` em volume integral, a outra atua como gatilho de ducking sobre a música — preserva inteligibilidade da fala. `-c:v copy`. Falha do ffmpeg → log ERROR + retorna `clip_path` original. **Não importa `PipelineConfig`** (regra fixa de produto).
 - **APIs públicas:** `MusicMixer.mix(clip_path, track) -> Path`.
 - **Dependências externas:** `ffmpeg`.
 - **Pipeline:** geração.
