@@ -34,6 +34,7 @@ from youcut.reviewer import review_clips
 from youcut.selector import prompt_clip_selection
 from youcut.session_store import list_sessions, save_session
 from youcut.social_composer import compose_social_clip
+from youcut.visual_style import apply_visual_style
 from youcut.thumbnail_generator import generate_thumbnail
 from youcut.title_overlay import add_title_overlay
 from youcut.transcriber import transcribe
@@ -236,7 +237,6 @@ def _run_single_source_pipeline(
     metadata_paths: list[Path] = []
     captions_applied_flags: list[bool] = []
     caption_warnings: list[str | None] = []
-    captions_already_burned: list[bool] = []
 
     with progress:
         task_dl = progress.add_task("Baixando vídeo...", total=None)
@@ -290,11 +290,8 @@ def _run_single_source_pipeline(
         for i, clip in enumerate(viral_clips):
             try:
                 cut_result = cut_clip(video_path, clip, i, config)
-                clip_path, captions_burned, _ = _extract_cut_result(cut_result)
+                clip_path, _, _ = _extract_cut_result(cut_result)
                 clip_paths.append(clip_path)
-                captions_already_burned.append(
-                    captions_burned and isinstance(cut_result, CaptionBurnResult)
-                )
             except Exception as e:
                 progress.stop()
                 _err_console.print(
@@ -318,12 +315,11 @@ def _run_single_source_pipeline(
                     clip_paths[index] = final_path
                     captions_applied_flags.append(captions_applied)
                     caption_warnings.append(caption_warning)
-                elif index < len(captions_already_burned) and captions_already_burned[index]:
-                    # CaptionBurner já queimou legendas (pós-decoupage) em cut_clip.
-                    # Pular o segundo burn evita legendas duplicadas e desalinhadas.
-                    captions_applied_flags.append(True)
-                    caption_warnings.append(None)
                 else:
+                    # Social/classic: tratamento visual ANTES das legendas (RF-13/14).
+                    # No-op silencioso em modo youtube/run legacy via gate interno do módulo.
+                    clip_path = apply_visual_style(clip_path, config)
+                    clip_paths[index] = clip_path
                     add_captions(clip_path, transcription, clip, config)
                     captions_applied_flags.append(True)
                     caption_warnings.append(None)
@@ -846,6 +842,9 @@ def _build_social_pipeline_config(
         face_detection_confidence=(
             base_config.face_detection_confidence if base_config else 0.5
         ),
+        social_visual_style_enabled=(
+            base_config.social_visual_style_enabled if base_config else True
+        ),
     )
 
 
@@ -887,9 +886,15 @@ def _resolve_upload_platforms(
 
 
 def _extract_cut_result(cut_result: Path | CaptionBurnResult) -> tuple[Path, bool, str | None]:
+    """Normaliza retorno de `cut_clip`. Pós-feature 'tratamento visual',
+    `cut_clip` devolve sempre `Path` — legendas não são mais queimadas
+    dentro do clipper. O ramo `CaptionBurnResult` é mantido apenas para
+    compatibilidade com mocks/legados; novos callers recebem flag
+    `captions_applied=False` em Path (a queima ocorre no orquestrador,
+    após o tratamento visual)."""
     if isinstance(cut_result, CaptionBurnResult):
         return cut_result.output_path, cut_result.captions_applied, cut_result.warning
-    return cut_result, True, None
+    return cut_result, False, None
 
 
 def _is_editorial_social_layout(config: PipelineConfig) -> bool:
@@ -914,6 +919,8 @@ def _finalize_editorial_social_clip(
         composed_path = compose_social_clip(framed_path, clip, config)
     except Exception as exc:
         logger.warning("Social composer falhou; usando clipe base %s: %s", clip_path.name, exc)
+
+    composed_path = apply_visual_style(composed_path, config)
 
     result = CaptionBurner().burn(composed_path, style="word", layout_mode="bottom_panel")
     return result.output_path, result.captions_applied, result.warning
@@ -1214,6 +1221,14 @@ def run_flow_b(
                     clip_path, captions_applied, caption_warning = _finalize_editorial_social_clip(
                         clip_path, sc, social_config
                     )
+                else:
+                    # Social/classic: tratamento visual ANTES da queima de legenda (RF-13/14).
+                    clip_path = apply_visual_style(clip_path, social_config)
+                    if social_config.cut_mode == "social":
+                        burn_result = CaptionBurner().burn(clip_path, style="word")
+                        clip_path = burn_result.output_path
+                        captions_applied = burn_result.captions_applied
+                        caption_warning = burn_result.warning
                 short_clip_results.append((clip_path, captions_applied, caption_warning))
             except Exception as e:
                 logger.warning("Erro ao cortar clipe %d: %s", i, e)
@@ -1364,6 +1379,15 @@ def run_flow_c(
                     clip_path, captions_applied, caption_warning = _finalize_editorial_social_clip(
                         clip_path, clip, config
                     )
+                else:
+                    # Social/classic: tratamento visual ANTES das legendas (RF-13/14).
+                    # Em modo youtube, apply_visual_style é no-op via gate interno.
+                    clip_path = apply_visual_style(clip_path, config)
+                    if config.cut_mode == "social":
+                        burn_result = CaptionBurner().burn(clip_path, style="word")
+                        clip_path = burn_result.output_path
+                        captions_applied = burn_result.captions_applied
+                        caption_warning = burn_result.warning
 
                 # Etapa de trilha sonora (apenas modo social)
                 track: MusicTrack | None = None
@@ -1727,6 +1751,12 @@ def cuts(
         "--filter",
         help="Preset de cor para clipes social: none, warm, cool, vintage, punchy.",
     ),
+    no_visual_style: bool = typer.Option(
+        False,
+        "--no-visual-style",
+        help="Desliga o tratamento visual padrão (cor fria + cantos arredondados + vinheta) "
+             "aplicado por default em cortes sociais. Use para gerar clipes 'crus'.",
+    ),
     log_level: str = typer.Option("INFO", "--log-level", help="Nível de log"),
     log_file: Optional[Path] = typer.Option(None, "--log-file", help="Arquivo de log"),
     music: bool = typer.Option(False, "--music", help="Adicionar trilha sonora automática (apenas modo social)"),
@@ -1835,6 +1865,7 @@ def cuts(
             social_layout_mode=layout_mode,
             decoupage_enabled=decoupage,
             social_filter_preset=color_preset,
+            social_visual_style_enabled=not no_visual_style,
         )
     except Exception as e:
         _err_console.print(Panel(str(e), title="[red]Erro de Configuração[/red]", border_style="red"))

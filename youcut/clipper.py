@@ -3,11 +3,10 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from youcut.caption_burner import CaptionBurner
 from youcut.color_filter import get_filter_chain
 from youcut.config import PipelineConfig
 from youcut.decoupage import remove_silences
-from youcut.models import CaptionBurnResult, ViralClip
+from youcut.models import ViralClip
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +33,12 @@ def check_ffmpeg() -> None:
 
 def cut_clip(
     video_path: Path, clip: ViralClip, index: int, config: PipelineConfig
-) -> Path | CaptionBurnResult:
+) -> Path:
+    """Corta o clipe e aplica decoupage. NÃO queima legendas — isso é
+    responsabilidade do orquestrador em `cli.py`, executado **após** o
+    tratamento visual no caminho social/classic (ver Tech Spec da feature
+    'Tratamento Visual Padrão dos Cortes Sociais').
+    """
     check_ffmpeg()
 
     output_dir = config.output_dir / video_path.stem
@@ -69,9 +73,6 @@ def cut_clip(
                 "Decoupage falhou em %s: %s — mantendo clipe original.",
                 output_path.name, exc,
             )
-
-    if clip.cut_mode == "social" and config.social_layout_mode == "classic":
-        output_path = CaptionBurner().burn(output_path, style="word")
 
     return output_path
 

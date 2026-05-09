@@ -169,3 +169,17 @@ def test_pipeline_config_session_timeout_minutes(monkeypatch):
     from youcut.config import PipelineConfig
     config = PipelineConfig(session_timeout_minutes=10)
     assert config.session_timeout_minutes == 10
+
+
+def test_social_visual_style_enabled_default_true(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    from youcut.config import PipelineConfig
+    config = PipelineConfig()
+    assert config.social_visual_style_enabled is True
+
+
+def test_social_visual_style_enabled_can_be_disabled(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    from youcut.config import PipelineConfig
+    config = PipelineConfig(social_visual_style_enabled=False)
+    assert config.social_visual_style_enabled is False

@@ -3,10 +3,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from youcut.caption_burner import CaptionBurner
 from youcut.clipper import PADDING, cut_clip
 from youcut.config import PipelineConfig
-from youcut.models import CaptionBurnResult, ViralClip
+from youcut.models import ViralClip
 
 
 @pytest.fixture
@@ -192,66 +191,12 @@ class TestSocialModeNonRegression:
         assert "boxblur" in " ".join(cmd)
 
 
-class TestCaptionBurnerIntegration:
-    def test_social_clip_calls_caption_burner(self, config, social_clip, tmp_path):
-        video_path = tmp_path / "video.mp4"
-        video_path.touch()
-        captioned_path = tmp_path / "output" / "video" / "clip_01_captioned.mp4"
+class TestCaptionBurnerNotInvokedInCutClip:
+    """Pós-refator: cut_clip NÃO queima legendas — isso virou responsabilidade
+    do orquestrador em cli.py (executado após o tratamento visual).
+    """
 
-        with (
-            patch("youcut.clipper.shutil.which", return_value="/usr/bin/ffmpeg"),
-            patch("youcut.clipper.subprocess.run") as mock_run,
-            patch("youcut.clipper.CaptionBurner") as mock_burner_cls,
-        ):
-            mock_run.return_value = MagicMock(returncode=0)
-            mock_burner_cls.return_value.burn.return_value = CaptionBurnResult(
-                output_path=captioned_path,
-                captions_applied=True,
-            )
-
-            result = cut_clip(video_path, social_clip, 0, config)
-
-        mock_burner_cls.return_value.burn.assert_called_once()
-        assert result.output_path == captioned_path
-        assert result.captions_applied is True
-
-    def test_social_clip_burn_called_with_style_word(self, config, social_clip, tmp_path):
-        video_path = tmp_path / "video.mp4"
-        video_path.touch()
-        captioned_path = tmp_path / "output" / "video" / "clip_01_captioned.mp4"
-
-        with (
-            patch("youcut.clipper.shutil.which", return_value="/usr/bin/ffmpeg"),
-            patch("youcut.clipper.subprocess.run") as mock_run,
-            patch("youcut.clipper.CaptionBurner") as mock_burner_cls,
-        ):
-            mock_run.return_value = MagicMock(returncode=0)
-            mock_burner_cls.return_value.burn.return_value = CaptionBurnResult(
-                output_path=captioned_path,
-                captions_applied=True,
-            )
-
-            cut_clip(video_path, social_clip, 0, config)
-
-        call_kwargs = mock_burner_cls.return_value.burn.call_args
-        assert call_kwargs.kwargs.get("style") == "word" or call_kwargs.args[1] == "word"
-
-    def test_youtube_clip_does_not_call_caption_burner(self, config, youtube_clip, tmp_path):
-        video_path = tmp_path / "video.mp4"
-        video_path.touch()
-
-        with (
-            patch("youcut.clipper.shutil.which", return_value="/usr/bin/ffmpeg"),
-            patch("youcut.clipper.subprocess.run") as mock_run,
-            patch("youcut.clipper.CaptionBurner") as mock_burner_cls,
-        ):
-            mock_run.return_value = MagicMock(returncode=0)
-
-            cut_clip(video_path, youtube_clip, 0, config)
-
-        mock_burner_cls.return_value.burn.assert_not_called()
-
-    def test_social_clip_fallback_path_returned_when_burn_returns_original(
+    def test_social_classic_returns_path_not_caption_burn_result(
         self, config, social_clip, tmp_path
     ):
         video_path = tmp_path / "video.mp4"
@@ -260,23 +205,38 @@ class TestCaptionBurnerIntegration:
         with (
             patch("youcut.clipper.shutil.which", return_value="/usr/bin/ffmpeg"),
             patch("youcut.clipper.subprocess.run") as mock_run,
-            patch("youcut.clipper.CaptionBurner") as mock_burner_cls,
         ):
             mock_run.return_value = MagicMock(returncode=0)
-            mock_burner_cls.return_value.burn.return_value = CaptionBurnResult(
-                output_path=tmp_path / "output" / "video" / "clip_01.mp4",
-                captions_applied=False,
-                warning="FFmpeg falhou: libass ausente",
-            )
-
             result = cut_clip(video_path, social_clip, 0, config)
 
-        assert result.output_path.name == "clip_01.mp4"
-        assert result.captions_applied is False
-        assert "FFmpeg falhou" in result.warning
+        assert isinstance(result, Path)
+        assert result.name == "clip_01.mp4"
+
+    def test_social_classic_does_not_import_caption_burner(self):
+        """clipper.py não deve mais importar CaptionBurner."""
+        import importlib
+
+        mod = importlib.import_module("youcut.clipper")
+        assert not hasattr(mod, "CaptionBurner"), (
+            "clipper.py não deve mais expor CaptionBurner — a queima de legenda "
+            "migrou para o orquestrador em cli.py."
+        )
+
+    def test_youtube_clip_returns_path(self, config, youtube_clip, tmp_path):
+        video_path = tmp_path / "video.mp4"
+        video_path.touch()
+
+        with (
+            patch("youcut.clipper.shutil.which", return_value="/usr/bin/ffmpeg"),
+            patch("youcut.clipper.subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(returncode=0)
+            result = cut_clip(video_path, youtube_clip, 0, config)
+
+        assert isinstance(result, Path)
+        assert result.name == "clip_01.mp4"
 
     def test_no_circular_import(self):
         import importlib
         mod = importlib.import_module("youcut.clipper")
         assert hasattr(mod, "cut_clip")
-        assert hasattr(mod, "CaptionBurner")

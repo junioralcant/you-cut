@@ -45,6 +45,7 @@ class PipelineConfig(BaseSettings):
     social_layout_title_color_mode: Literal["engagement_default", "yellow", "orange", "custom"] = "engagement_default"
     social_layout_title_bg_color: str = "#F4C400"
     social_layout_title_text_color: str = "#111111"
+    social_visual_style_enabled: bool = True
 
     decoupage_enabled: bool = True
     decoupage_noise_db: float = -30.0
