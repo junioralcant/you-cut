@@ -173,3 +173,89 @@ def test_generate_social_top_image_falls_back_to_local_frame(tmp_path):
         output = generate_social_top_image(clip, tmp_path, clip_path, config=SimpleNamespace(social_layout_image_provider="local", social_layout_top_image_height=860))
 
     assert output.exists()
+
+
+# ────────────────────────────────────────────────────────────────────────────────
+# Task 2.0 — propagação de config nos callers AI do social_composer
+# ────────────────────────────────────────────────────────────────────────────────
+
+
+def test_render_title_band_via_ai_propagates_config(monkeypatch, tmp_path):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    from youcut.config import PipelineConfig
+
+    ai_band = tmp_path / "ai_band.png"
+    Image.new("RGB", (1080, 180), color=(255, 140, 0)).save(ai_band)
+    config = PipelineConfig(
+        social_layout_mode="speaker_bottom_ai_top",
+        social_layout_title_color_mode="orange",
+        openai_api_key="test-openai-key",
+        cut_mode="social",
+    )
+
+    captured: dict = {}
+
+    def fake_skill(*, prompt, reference_frames, openai_api_key, timeout, config=None):
+        captured["config"] = config
+        return ai_band.read_bytes()
+
+    with (
+        patch("youcut.social_composer._build_ai_clients", return_value=(object(), object())),
+        patch("youcut.social_composer._resolve_openai_api_key", return_value="test-openai-key"),
+        patch("youcut.social_composer._run_thumbnail_skill_script", side_effect=fake_skill),
+    ):
+        _render_title_band_image(
+            "ALERTA",
+            config,
+            width=1080,
+            height=180,
+            suggested_color_mode="orange",
+        )
+
+    # `_render_title_band_image` faz `model_copy` para ajustar a paleta,
+    # então o objeto chega como cópia preservando `cut_mode`.
+    assert captured["config"] is not None
+    assert getattr(captured["config"], "cut_mode", None) == "social"
+
+
+def test_render_social_header_via_ai_propagates_config(monkeypatch, tmp_path):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    from youcut.config import PipelineConfig
+    from youcut.social_composer import _render_social_header_image_via_ai
+
+    top_path = tmp_path / "top.png"
+    fallback_path = tmp_path / "fallback.png"
+    Image.new("RGB", (1080, 600), color=(0, 200, 200)).save(top_path)
+    Image.new("RGB", (1080, 740), color=(0, 100, 100)).save(fallback_path)
+    out_bytes_path = tmp_path / "ai_header.png"
+    Image.new("RGB", (1080, 740), color=(255, 200, 0)).save(out_bytes_path)
+
+    config = PipelineConfig(
+        openai_api_key="test-openai-key",
+        cut_mode="social",
+    )
+    captured: dict = {}
+
+    def fake_skill(*, prompt, reference_frames, openai_api_key, timeout, config=None):
+        captured["config"] = config
+        return out_bytes_path.read_bytes()
+
+    with (
+        patch("youcut.social_composer._build_ai_clients", return_value=(object(), object())),
+        patch("youcut.social_composer._resolve_openai_api_key", return_value="test-openai-key"),
+        patch("youcut.social_composer._run_thumbnail_skill_script", side_effect=fake_skill),
+    ):
+        _render_social_header_image_via_ai(
+            top_image_path=top_path,
+            title="hello",
+            config=config,
+            width=1080,
+            height=740,
+            top_height=600,
+            band_height=140,
+            suggested_color_mode="yellow",
+            fallback_path=fallback_path,
+        )
+
+    assert captured["config"] is config
+    assert getattr(captured["config"], "cut_mode", None) == "social"

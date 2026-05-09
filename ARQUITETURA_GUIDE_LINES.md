@@ -50,7 +50,7 @@
 └───────────────────┘
         │
         ▼
-┌───────────────────┐    thumbnail_generator.py  (DALL·E 3 + Pillow)
+┌───────────────────┐    thumbnail_generator.py  (gpt-image-1.5 + Pillow; size derivado de cut_mode)
 │    Thumbnail      │    preview.py  (preview rápido para CLI)
 └───────────────────┘
         │
@@ -187,7 +187,7 @@
 - **Pipeline:** composição (modo youtube, opcional).
 
 #### `youcut/social_composer.py`
-- **Função:** monta layout editorial 1080×1920 (modo `speaker_bottom_ai_top`): imagem IA no topo, tarja de título/hook no meio, vídeo (com face tracking) embaixo. Pede ao Claude o texto/cores da tarja; gera imagem com OpenAI (DALL·E).
+- **Função:** monta layout editorial 1080×1920 (modo `speaker_bottom_ai_top`): imagem IA no topo, tarja de título/hook no meio, vídeo (com face tracking) embaixo. Pede ao Claude o texto/cores da tarja; gera imagem com OpenAI `gpt-image-1.5` (size derivado de `cut_mode`: `1024x1024` em `social`, `1536x1024` em `youtube`).
 - **APIs públicas:** `compose_social_clip(clip_path, clip, config)`.
 - **Dependências externas:** `anthropic`, `openai`, `Pillow`, `ffmpeg`.
 - **Pipeline:** composição (modo social).
@@ -197,10 +197,11 @@
 ### 2.6 Thumbnail e Preview
 
 #### `youcut/thumbnail_generator.py`
-- **Função:** seleciona melhor frame (heurística brilho/contraste/clareza), opcionalmente gera imagem com DALL·E 3, compõe thumbnail final 1280×720 com Pillow. Também gera a imagem de topo do `social_composer`.
-- **APIs públicas:** `generate_thumbnail(clip, output_dir, clip_index, clip_path, config)`, `generate_social_top_image(clip, output_dir, clip_path, config)`.
+- **Função:** seleciona melhor frame (heurística brilho/contraste/clareza), opcionalmente gera imagem com OpenAI `gpt-image-1.5`, compõe thumbnail final 1280×720 com Pillow. Também gera a imagem de topo do `social_composer`.
+- **APIs públicas:** `generate_thumbnail(clip, output_dir, clip_index, clip_path, config, cut_mode=None)`, `generate_social_top_image(clip, output_dir, clip_path, config)`.
+- **Perfil de custo por modo:** helpers internos `_resolve_image_cost_profile(config)` e `_resolve_image_request_params(profile)` derivam `(model, size, quality)` a partir de `config.cut_mode`. Modo `social` usa `gpt-image-1.5 / 1024x1024 / low`; modo `youtube` (default) usa `gpt-image-1.5 / 1536x1024 / low`. O wrapper `_run_thumbnail_skill_script` injeta `--size`, `--quality`, `--model` no subprocesso da skill.
 - **Heurísticas de prompt:** texto ≤7% da área; paleta ciano/verde/amarelo/laranja; evita vermelho dominante (regras em `prompt.md`).
-- **Dependências externas:** `openai` (DALL·E 3), `Pillow`, `ffmpeg`.
+- **Dependências externas:** `openai` (`gpt-image-1.5`), `Pillow`, `ffmpeg`.
 - **Pipeline:** thumbnail.
 
 #### `youcut/preview.py`
@@ -353,6 +354,11 @@
 - Heurísticas para geração e seleção de thumbnails (lidas em runtime pelo `thumbnail_generator.py` e pela skill local `thumbnail-generator`).
 - Princípios: imagem conta a história sozinha; texto ≤7% da área; paleta ciano/verde/amarelo/laranja; evitar vermelho dominante; não repetir o título.
 
+#### `.claude/skills/thumbnail-generator/scripts/generate_thumbnail.py`
+- Script invocado por subprocess pelo `_run_thumbnail_skill_script` (em `youcut/thumbnail_generator.py`).
+- Aceita argumentos posicionais (`prompt`, `output_filename`, `image_paths...`) e flags opcionais `--model`, `--size`, `--quality` para parametrizar o `POST /v1/images/edits` da OpenAI. Defaults: `gpt-image-1.5`, `1536x1024`, `low` (backward-compat com chamadas legadas).
+- Crop 16:9 só é aplicado quando o tamanho retornado é `1536x1024` (modo `youtube`); modo `social` (`1024x1024`) é redimensionado downstream pelo pipeline Python.
+
 #### `README.md`
 - Manual humano de uso (instalação, comandos, exemplos). **Não é referência de arquitetura.**
 
@@ -432,7 +438,7 @@ Pipeline isolado que converte vídeos curtos (≤120 s) em motion comics 9:16 re
 ## 9. Cheatsheet de Contratos Importantes
 
 - **Cache de transcrição** é endereçado por **MD5 do vídeo**. Renomear o arquivo *não* invalida o cache; alterar bytes invalida.
-- **Modo `youtube`** = stream copy (`-c copy`), 16:9, sem face tracking nem composição social. Thumbnails via DALL·E.
+- **Modo `youtube`** = stream copy (`-c copy`), 16:9, sem face tracking nem composição social. Thumbnails via `gpt-image-1.5` (`1536x1024`).
 - **Modo `social`** = re-encode 9:16, opcionalmente com face tracking + diarização + composição editorial (`speaker_bottom_ai_top`).
 - **`ANTHROPIC_API_KEY`** é validado no boot — `PipelineConfig` falha cedo se ausente.
 - **`ffmpeg 8.1+ com libass`** é dependência crítica em runtime — `cli._check_ffmpeg()` falha cedo se não estiver no `PATH`.

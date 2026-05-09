@@ -264,6 +264,7 @@ def _render_social_header_image_via_ai(
             reference_frames=[top_image_path.read_bytes(), fallback_path.read_bytes()],
             openai_api_key=openai_api_key,
             timeout=60.0,
+            config=config,
         )
         return _write_resized_png(image_bytes, width=width, height=height)
     except Exception as exc:
@@ -379,6 +380,7 @@ def _render_title_band_image_via_ai(
             reference_frames=[reference_path.read_bytes()],
             openai_api_key=openai_api_key,
             timeout=60.0,
+            config=config,
         )
         return _write_resized_png(image_bytes, width=width, height=height)
     except Exception as exc:

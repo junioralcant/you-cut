@@ -21,6 +21,9 @@ from youcut.thumbnail_generator import (
     _generate_thumbnail_via_ai_result,
     _load_transcript_excerpt,
     _resize_to_youtube_format,
+    _resolve_image_cost_profile,
+    _resolve_image_request_params,
+    _run_thumbnail_skill_script,
     _select_supporting_reference_frames_via_ai_result,
     _select_generation_reference_frames,
     _select_best_face_frame,
@@ -698,3 +701,241 @@ def test_select_best_face_frame_returns_highest_score_frame(mock_candidates, tmp
         result = _select_best_face_frame(tmp_path / "clip.mp4", n_samples=2)
 
     assert result == b"b"
+
+
+# ────────────────────────────────────────────────────────────────────────────────
+# Task 1.0 — perfil de custo + wrapper subprocess parametrizado
+# ────────────────────────────────────────────────────────────────────────────────
+
+
+def _make_config(cut_mode: str = "social"):
+    return SimpleNamespace(cut_mode=cut_mode)
+
+
+def test_resolve_image_cost_profile_social():
+    assert _resolve_image_cost_profile(_make_config("social")) == "social"
+
+
+def test_resolve_image_cost_profile_youtube():
+    assert _resolve_image_cost_profile(_make_config("youtube")) == "standard"
+
+
+def test_resolve_image_cost_profile_none_config():
+    assert _resolve_image_cost_profile(None) == "standard"
+
+
+def test_resolve_image_request_params_standard():
+    assert _resolve_image_request_params("standard") == ("gpt-image-1.5", "1536x1024", "low")
+
+
+def test_resolve_image_request_params_social():
+    assert _resolve_image_request_params("social") == ("gpt-image-1.5", "1024x1024", "low")
+
+
+def _capture_run_args(captured: dict, output_bytes: bytes):
+    def fake_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        captured["cwd"] = kwargs.get("cwd")
+        # Simula a saída do script: cria thumbnails/<output_name>.png na cwd
+        output_name = cmd[3]
+        thumbnails_dir = Path(captured["cwd"]) / "thumbnails"
+        thumbnails_dir.mkdir(parents=True, exist_ok=True)
+        (thumbnails_dir / output_name).write_bytes(output_bytes)
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+    return fake_run
+
+
+def test_run_skill_script_passes_size_arg_for_social(tmp_path):
+    captured: dict = {}
+    fake_run = _capture_run_args(captured, _make_png(8, 8))
+    with patch("youcut.thumbnail_generator.subprocess.run", side_effect=fake_run):
+        result = _run_thumbnail_skill_script(
+            prompt="hello",
+            reference_frames=[_make_png(8, 8)],
+            openai_api_key="sk-test",
+            timeout=5.0,
+            config=_make_config("social"),
+        )
+    assert isinstance(result, bytes) and len(result) > 0
+    cmd = captured["cmd"]
+    assert "--size" in cmd
+    assert cmd[cmd.index("--size") + 1] == "1024x1024"
+    assert cmd[cmd.index("--quality") + 1] == "low"
+    assert cmd[cmd.index("--model") + 1] == "gpt-image-1.5"
+
+
+def test_run_skill_script_passes_size_arg_for_youtube(tmp_path):
+    captured: dict = {}
+    fake_run = _capture_run_args(captured, _make_png(8, 8))
+    with patch("youcut.thumbnail_generator.subprocess.run", side_effect=fake_run):
+        _run_thumbnail_skill_script(
+            prompt="hello",
+            reference_frames=[_make_png(8, 8)],
+            openai_api_key="sk-test",
+            timeout=5.0,
+            config=_make_config("youtube"),
+        )
+    cmd = captured["cmd"]
+    assert cmd[cmd.index("--size") + 1] == "1536x1024"
+
+
+def test_run_skill_script_no_config_keeps_legacy_args(tmp_path):
+    captured: dict = {}
+    fake_run = _capture_run_args(captured, _make_png(8, 8))
+    with patch("youcut.thumbnail_generator.subprocess.run", side_effect=fake_run):
+        _run_thumbnail_skill_script(
+            prompt="hello",
+            reference_frames=[_make_png(8, 8)],
+            openai_api_key="sk-test",
+            timeout=5.0,
+        )
+    cmd = captured["cmd"]
+    assert cmd[cmd.index("--size") + 1] == "1536x1024"
+    assert cmd[cmd.index("--model") + 1] == "gpt-image-1.5"
+    assert cmd[cmd.index("--quality") + 1] == "low"
+
+
+def test_run_skill_script_emits_info_log(caplog):
+    captured: dict = {}
+    fake_run = _capture_run_args(captured, _make_png(8, 8))
+    with patch("youcut.thumbnail_generator.subprocess.run", side_effect=fake_run), caplog.at_level("INFO"):
+        _run_thumbnail_skill_script(
+            prompt="hi",
+            reference_frames=[_make_png(8, 8)],
+            openai_api_key="sk-test",
+            timeout=5.0,
+            config=_make_config("social"),
+        )
+    assert "profile=social" in caplog.text
+    assert "size=1024x1024" in caplog.text
+    assert "model=gpt-image-1.5" in caplog.text
+
+
+def test_run_skill_script_raises_when_no_api_key():
+    with pytest.raises(ValueError, match="OPENAI_API_KEY"):
+        _run_thumbnail_skill_script(
+            prompt="x",
+            reference_frames=[_make_png(8, 8)],
+            openai_api_key=None,
+            timeout=5.0,
+        )
+
+
+def test_run_skill_script_raises_when_no_frames():
+    with pytest.raises(ValueError, match="frame de referência"):
+        _run_thumbnail_skill_script(
+            prompt="x",
+            reference_frames=[],
+            openai_api_key="sk-test",
+            timeout=5.0,
+        )
+
+
+# ────────────────────────────────────────────────────────────────────────────────
+# Task 2.0 — propagação de config nos callers + cut_mode opcional + regressão
+# ────────────────────────────────────────────────────────────────────────────────
+
+
+def _social_clip() -> ViralClip:
+    return ViralClip(
+        title="Hook viral",
+        reason="energy",
+        viral_score=8.0,
+        start_time=0.0,
+        end_time=30.0,
+        description="d",
+        hashtags=["#x"],
+        thumbnail_idea="t",
+        thumbnail_text="HOOK",
+        cut_mode="social",
+    )
+
+
+def test_generate_thumbnail_via_ai_result_propagates_config_social():
+    captured: dict = {}
+
+    def fake_skill(*, prompt, reference_frames, openai_api_key, timeout, config=None):
+        captured["config"] = config
+        return _make_png(1536, 864)
+
+    with patch("youcut.thumbnail_generator._run_thumbnail_skill_script", side_effect=fake_skill):
+        cfg = _make_config("social")
+        _generate_thumbnail_via_ai_result(
+            frame_bytes=_make_png(8, 8),
+            title="t",
+            openai_client=MagicMock(),
+            reference_frames=[_make_png(8, 8)],
+            openai_api_key="sk-test",
+            config=cfg,
+        )
+    assert captured["config"] is cfg
+
+
+def test_generate_thumbnail_via_ai_result_no_config_keeps_legacy():
+    captured: dict = {}
+
+    def fake_skill(*, prompt, reference_frames, openai_api_key, timeout, config=None):
+        captured["config"] = config
+        return _make_png(1536, 864)
+
+    with patch("youcut.thumbnail_generator._run_thumbnail_skill_script", side_effect=fake_skill):
+        _generate_thumbnail_via_ai_result(
+            frame_bytes=_make_png(8, 8),
+            title="t",
+            openai_client=MagicMock(),
+            reference_frames=[_make_png(8, 8)],
+            openai_api_key="sk-test",
+        )
+    assert captured["config"] is None
+
+
+def test_apply_cut_mode_override_no_override_returns_same_config():
+    from youcut.thumbnail_generator import _apply_cut_mode_override
+    cfg = _make_config("youtube")
+    assert _apply_cut_mode_override(cfg, None) is cfg
+
+
+def test_apply_cut_mode_override_creates_namespace_when_no_config():
+    from youcut.thumbnail_generator import _apply_cut_mode_override
+    result = _apply_cut_mode_override(None, "social")
+    assert getattr(result, "cut_mode", None) == "social"
+
+
+def test_apply_cut_mode_override_uses_model_copy_when_available():
+    from youcut.thumbnail_generator import _apply_cut_mode_override
+
+    class FakePipelineConfig:
+        def __init__(self, cut_mode, other="kept"):
+            self.cut_mode = cut_mode
+            self.other = other
+
+        def model_copy(self, *, update):
+            new_cm = update.get("cut_mode", self.cut_mode)
+            return FakePipelineConfig(cut_mode=new_cm, other=self.other)
+
+    cfg = FakePipelineConfig(cut_mode="youtube")
+    result = _apply_cut_mode_override(cfg, "social")
+    assert result is not cfg
+    assert result.cut_mode == "social"
+    assert result.other == "kept"
+
+
+def test_run_skill_script_arch_invariant_not_imported_in_comic():
+    """RF4: pipeline `comic` continua independente do skill script.
+
+    Garante que nenhum módulo em `youcut/comic/**` importa
+    `_run_thumbnail_skill_script` por engano (Tech Spec §Riscos item 5).
+    """
+    from pathlib import Path
+    repo_root = Path(__file__).resolve().parent.parent
+    comic_dir = repo_root / "youcut" / "comic"
+    forbidden = "_run_thumbnail_skill_script"
+    offenders: list[str] = []
+    for py in comic_dir.rglob("*.py"):
+        text = py.read_text(encoding="utf-8")
+        if forbidden in text:
+            offenders.append(str(py.relative_to(repo_root)))
+    assert offenders == [], (
+        f"Pipeline `comic` não pode depender de {forbidden} (RF4 do PRD). "
+        f"Encontrado em: {offenders}"
+    )

@@ -101,7 +101,7 @@ Variáveis opcionais:
 # OUTPUT_DIR=output
 # DRY_RUN=false
 
-# Necessário para o modo YouTube (geração de thumbnails via DALL-E 3) e
+# Necessário para o modo YouTube (geração de thumbnails via gpt-image-1.5) e
 # para o `youcut comic` (geração de masters/anchors via gpt-image-1):
 # OPENAI_API_KEY=sua_chave_openai
 
@@ -265,11 +265,13 @@ youcut cuts "https://www.youtube.com/watch?v=exemplo" --upload --platforms youtu
 youcut cuts "https://www.youtube.com/watch?v=exemplo" --max-clips 3 --skip-review
 ```
 
-> **Thumbnails:** para gerar thumbnails via DALL-E 3 no modo YouTube, configure `OPENAI_API_KEY` no `.env`.
+> **Thumbnails:** para gerar thumbnails via OpenAI `gpt-image-1.5` no modo YouTube, configure `OPENAI_API_KEY` no `.env`.
 >
 > **Thumbnail com texto por padrão:** no modo YouTube, o pipeline usa por padrão o `thumbnail_text` sugerido pela análise de IA para gerar a thumbnail já com texto embutido.
 >
 > **Override opcional do texto:** use `--thumbnail-text "SEU TEXTO"` quando quiser sobrescrever esse texto padrão e forçar um texto específico, seguindo as regras de layout do projeto.
+>
+> **Custo otimizado para cortes sociais:** no modo `social` (Shorts/Reels/TikTok), o pipeline solicita a imagem em `1024x1024` (em vez de `1536x1024`), reduzindo o custo da geração em ~30% sem perda perceptível em mobile. O modo `youtube` e o pipeline `youcut comic` mantêm a qualidade atual sem alteração.
 
 ### Fluxo B — Vídeos curtos a partir de cortes existentes
 
@@ -593,6 +595,6 @@ tests/
 - `video_metadata.py`: extrai título e duração do vídeo sem download completo (via `yt-dlp`)
 - `analyzer.py`: modo `youtube` (15–25 min, 16:9) ou `social` (até 3 min, 9:16) com prompts parametrizados
 - `clipper.py`: stream copy sem re-encoding para modo `youtube`; filtro vertical para modo `social`
-- `thumbnail_generator.py`: gera thumbnails via DALL-E 3 (modo `youtube` com `OPENAI_API_KEY`)
+- `thumbnail_generator.py`: gera thumbnails via OpenAI `gpt-image-1.5` (modo `youtube` com `OPENAI_API_KEY`); modo `social` usa size reduzido (`1024x1024`) para economizar custo
 - `reviewer.py`: revisão interativa via terminal com aprovação, edição de título e regeneração de thumbnail
 - `session_store.py`: salva e carrega sessões em `~/.youcut/sessions/` para reaproveitamento no Fluxo B

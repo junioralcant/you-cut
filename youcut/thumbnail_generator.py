@@ -10,9 +10,9 @@ import tempfile
 from collections import Counter
 from functools import lru_cache
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
-from youcut.models import ClipRecord, ThumbnailFrameResult, ViralClip
+from youcut.models import ClipRecord, CutMode, ThumbnailFrameResult, ViralClip
 
 if TYPE_CHECKING:
     from PIL import Image, ImageDraw, ImageFont
@@ -35,6 +35,40 @@ _THUMBNAIL_SKILL_PATH = _REPO_ROOT / ".claude" / "skills" / "thumbnail-generator
 _THUMBNAIL_PRD_PATH = _REPO_ROOT / ".claude" / "skills" / "thumbnail-generator" / "prd.md"
 _THUMBNAIL_SKILL_SCRIPT_PATH = _REPO_ROOT / ".claude" / "skills" / "thumbnail-generator" / "scripts" / "generate_thumbnail.py"
 
+ImageCostProfile = Literal["standard", "social"]
+
+_PROFILE_REQUEST_PARAMS: dict[ImageCostProfile, tuple[str, str, str]] = {
+    "standard": ("gpt-image-1.5", "1536x1024", "low"),
+    "social": ("gpt-image-1.5", "1024x1024", "low"),
+}
+
+
+def _resolve_image_cost_profile(config: "PipelineConfig | None") -> ImageCostProfile:
+    if config is None:
+        return "standard"
+    cut_mode = getattr(config, "cut_mode", None)
+    return "social" if cut_mode == "social" else "standard"
+
+
+def _resolve_image_request_params(profile: ImageCostProfile) -> tuple[str, str, str]:
+    return _PROFILE_REQUEST_PARAMS[profile]
+
+
+def _apply_cut_mode_override(
+    config: "PipelineConfig | None",
+    cut_mode: CutMode | None,
+) -> "PipelineConfig | None":
+    if cut_mode is None:
+        return config
+    if config is None:
+        from types import SimpleNamespace
+        return SimpleNamespace(cut_mode=cut_mode)  # type: ignore[return-value]
+    if getattr(config, "cut_mode", None) == cut_mode:
+        return config
+    if hasattr(config, "model_copy"):
+        return config.model_copy(update={"cut_mode": cut_mode})
+    return config
+
 
 def generate_thumbnail(
     clip: ViralClip,
@@ -42,6 +76,7 @@ def generate_thumbnail(
     clip_index: int,
     clip_path: Path | None = None,
     config: "PipelineConfig | None" = None,
+    cut_mode: CutMode | None = None,
 ) -> Path:
     thumbnails_dir = output_dir / "thumbnails"
     thumbnails_dir.mkdir(parents=True, exist_ok=True)
@@ -51,7 +86,8 @@ def generate_thumbnail(
     if source is None:
         raise ValueError(f"clip_path não fornecido ou não existe: {clip_path}")
 
-    result = _build_thumbnail_result(clip, source, output_path, config)
+    effective_config = _apply_cut_mode_override(config, cut_mode)
+    result = _build_thumbnail_result(clip, source, output_path, effective_config)
     logger.info(
         "Thumbnail gerada: path=%s timestamp=%.2f selection_method=%s generation_method=%s",
         result.output_path,
@@ -106,6 +142,7 @@ def generate_social_top_image(
         openai_api_key=openai_api_key,
         provider=getattr(config, "social_layout_image_provider", "openai") if config is not None else "openai",
         target_size=(1080, getattr(config, "social_layout_top_image_height", 600) if config is not None else 600),
+        config=config,
     )
     output_path.write_bytes(image_bytes)
     logger.info("Imagem social superior gerada: method=%s output_path=%s", generation_method, output_path)
@@ -140,6 +177,7 @@ def _build_thumbnail_result(
     output_path: Path,
     config: "PipelineConfig | str | None",
 ) -> ThumbnailFrameResult:
+    pipeline_config = config if not isinstance(config, str) else None
     frames = _extract_frames_candidates(source)
     anthropic_client, openai_client = _build_ai_clients(config)
     openai_api_key = _resolve_openai_api_key(config, openai_client)
@@ -180,6 +218,7 @@ def _build_thumbnail_result(
             thumbnail_text=clip.thumbnail_text,
             clip_context=clip_context,
             transcript_visual_context=transcript_visual_context,
+            config=pipeline_config,
         )
     else:
         thumbnail_bytes, generation_method = _generate_thumbnail_via_ai_result(
@@ -191,6 +230,7 @@ def _build_thumbnail_result(
             thumbnail_text=clip.thumbnail_text,
             clip_context=clip_context,
             transcript_visual_context=transcript_visual_context,
+            config=pipeline_config,
         )
 
     image = _load_image_from_bytes(thumbnail_bytes)
@@ -624,6 +664,7 @@ def _generate_thumbnail_via_ai_result(
     thumbnail_text: str = "",
     clip_context: str = "",
     transcript_visual_context: str = "",
+    config: "PipelineConfig | None" = None,
 ) -> tuple[bytes, str]:
     if openai_client is None:
         logger.warning("Cliente OpenAI ausente; usando fallback local para geração de thumbnail")
@@ -643,6 +684,7 @@ def _generate_thumbnail_via_ai_result(
             reference_frames=reference_frame_bytes,
             openai_api_key=openai_api_key or _resolve_openai_api_key(None, openai_client),
             timeout=timeout,
+            config=config,
         )
         resized_bytes = _resize_image_bytes(image_bytes, target_size=(_THUMBNAIL_W, _THUMBNAIL_H))
         logger.info("Thumbnail gerada por IA: method=ai output_path=%s", "<in-memory>")
@@ -1031,11 +1073,23 @@ def _run_thumbnail_skill_script(
     reference_frames: list[bytes],
     openai_api_key: str | None,
     timeout: float,
+    config: "PipelineConfig | None" = None,
 ) -> bytes:
     if not openai_api_key:
         raise ValueError("OPENAI_API_KEY indisponível para o backend da skill de thumbnail")
     if not reference_frames:
         raise ValueError("Nenhum frame de referência disponível para a geração da thumbnail")
+
+    profile = _resolve_image_cost_profile(config)
+    model, size, quality = _resolve_image_request_params(profile)
+    logger.info(
+        "Thumbnail skill: profile=%s model=%s size=%s quality=%s frames=%d",
+        profile,
+        model,
+        size,
+        quality,
+        len(reference_frames),
+    )
 
     with tempfile.TemporaryDirectory() as tmpdir:
         tmpdir_path = Path(tmpdir)
@@ -1048,8 +1102,18 @@ def _run_thumbnail_skill_script(
         output_name = "generated.png"
         env = os.environ.copy()
         env["OPENAI_API_KEY"] = openai_api_key
+        cmd = [
+            sys.executable,
+            str(_THUMBNAIL_SKILL_SCRIPT_PATH),
+            prompt,
+            output_name,
+            *frame_paths,
+            "--model", model,
+            "--size", size,
+            "--quality", quality,
+        ]
         result = subprocess.run(
-            [sys.executable, str(_THUMBNAIL_SKILL_SCRIPT_PATH), prompt, output_name, *frame_paths],
+            cmd,
             cwd=tmpdir,
             env=env,
             capture_output=True,
@@ -1074,6 +1138,7 @@ def _generate_social_image_bytes(
     provider: str,
     target_size: tuple[int, int],
     timeout: float = 60.0,
+    config: "PipelineConfig | None" = None,
 ) -> tuple[bytes, str]:
     if provider == "local" or openai_client is None:
         logger.warning("Geração social por IA indisponível; usando fallback local")
@@ -1085,6 +1150,7 @@ def _generate_social_image_bytes(
             reference_frames=reference_frames,
             openai_api_key=openai_api_key or _resolve_openai_api_key(None, openai_client),
             timeout=timeout,
+            config=config,
         )
         return _resize_image_bytes(image_bytes, target_size=target_size), "ai"
     except Exception as exc:
