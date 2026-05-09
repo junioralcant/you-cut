@@ -35,13 +35,23 @@ class VideoMetadata(BaseModel):
 
 
 class MusicTrack(BaseModel):
-    """Faixa musical CC0 obtida da Pixabay e usada na mixagem do clipe social."""
+    """Faixa musical baixada de uma playlist do YouTube e usada na mixagem do clipe social."""
 
+    video_id: str
     name: str
-    pixabay_url: str
+    source_url: str
     local_path: Path
     mood: str
     duration_s: float
+
+
+class SyncReport(BaseModel):
+    """Resumo de uma execução de sincronização da playlist YouTube com o acervo local."""
+
+    new_tracks: int = 0
+    cached_tracks: int = 0
+    failed_tracks: int = 0
+    failed_details: list[tuple[str, str]] = []
 
 
 class ClipRecord(BaseModel):

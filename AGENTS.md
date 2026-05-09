@@ -48,6 +48,13 @@ Flags relevantes: `--max-clips/-n`, `--skip-review`, `--upload`, `--platforms`, 
 ### `youcut auth login|revoke|status`
 Gerencia tokens OAuth de YouTube / Instagram / TikTok, salvos em `~/.youcut/credentials/<plataforma>.json`.
 
+### `youcut music sync`
+Sincroniza, sob comando manual, uma playlist curada do YouTube com o acervo local de trilhas sonoras (`~/.youcut/music/`). Para cada faixa nova: baixa áudio m4a via `yt-dlp`, classifica em 1 dos 6 moods canônicos (`motivacional|reflexivo|energico|emocional|feliz|dramatico`) com Claude texto e persiste no índice `index.json`. Idempotente por `video_id`. Renderiza um `SyncReport` (novas / em cache / falhas) como tabela `rich`. Aplica-se exclusivamente a clipes em modo `social`.
+
+Flags relevantes: `--playlist URL` (default vem de `youtube_music_playlist_url`), `--dry-run`.
+
+`youcut cuts ... --music` (modo `social`) reusa o acervo local: escolhe uma faixa com `mood` igual ao do clipe (heurística keywords pt-BR já existente), com fallback global e seleção determinística via SHA-256 sobre `title+reason+social_visual_style`. A mixagem é regra fixa de produto: skip 10s, fade-in 1.0s, fade-out 1.2s, voz integral, música 55%, limitador 0.97 — implementada em `youcut/music/mixer.py` sem dependência de `PipelineConfig`.
+
 ### `youcut comic <video>`
 Pipeline **motion comic**: aceita um vídeo local curto (≤120 s) e gera um MP4 9:16 (1080×1920) com personagens ilustrados, áudio original preservado e legendas queimadas. Suporta 4 engines de animação (via `--engine`):
 
@@ -151,6 +158,19 @@ youcut/
   exporter.py             escreve clip_NN.txt
   session_store.py        persistência em ~/.youcut/sessions/
 
+  music/                  pipeline de trilha sonora (`youcut music sync` + cuts --music)
+    __init__.py           pacote vazio; submódulos importados explicitamente
+    library.py            MusicLibrary: lê/escreve ~/.youcut/music/index.json (atomic)
+    classifier.py         TrackMoodClassifier: 1 chamada Claude texto + tools schema fechado
+    sync.py               PlaylistSyncer: yt-dlp extract_flat + download m4a + classify
+                          + SyncReport idempotente por video_id
+    cli.py                subcomando Typer `music sync` + render rich
+    provider.py           YouTubeMusicProvider: classify_mood (heurística pt-BR) +
+                          pick_track determinístico (SHA-256 % N candidates)
+    mixer.py              MusicMixer.mix(clip_path, track) — filter graph fixo:
+                          skip 10s, fade-in 1.0s, fade-out 1.2s, voz integral,
+                          música 55%, alimiter=0.97
+
   comic/                  pipeline motion comic (`youcut comic`)
     __init__.py           re-export `run_comic_pipeline`
     cli.py                subcomando Typer + UX interativa
@@ -208,7 +228,7 @@ youcut/
 - `.agents/skills/` — skills locais (`criar-prd`, `criar-techspec.md`, `executar-task`, `task-review`, `executar-qa`, `executar-bugfix`, `thumbnail-generator`, etc.) que estruturam o ciclo de desenvolvimento.
 - `docs/` — site estático + termos / privacy policy publicados (necessários para review do TikTok).
 - `output/` — destino padrão dos clipes (configurável via `OUTPUT_DIR`).
-- `~/.youcut/credentials/` e `~/.youcut/sessions/` — estado persistente do usuário.
+- `~/.youcut/credentials/`, `~/.youcut/sessions/` e `~/.youcut/music/` — estado persistente do usuário (auth tokens, sessões `cuts`/`comic`, acervo local de trilhas).
 
 ---
 
@@ -263,6 +283,7 @@ Cada plataforma implementa a interface `Uploader` (`base.py`):
 | `comic_remotion_kenburns_default_scale` | `1.12`              | escala alvo do Ken Burns aplicado por cena |
 | `comic_remotion_idle_blink_period_sec`  | `4.5`               | periodicidade do idle blink do personagem |
 | `comic_remotion_pyphen_locale_fallback` | `pt_BR`             | locale `pyphen` quando o idioma da transcrição é desconhecido |
+| `youtube_music_playlist_url`       | URL fixa default         | playlist YouTube da qual `youcut music sync` baixa as trilhas (sobrescrevível por `.env`) |
 
 ### Variáveis de ambiente extras (não em `PipelineConfig`)
 - `YOUTUBE_CLIENT_SECRETS_FILE` — caminho do `client_secrets.json`
@@ -282,6 +303,8 @@ Cada plataforma implementa a interface `Uploader` (`base.py`):
 - **`SpeakerSegment`**, **`CropRegion`**, **`FaceTrackingResult`** — do face tracker.
 - **`ThumbnailFrameResult`** — resultado da seleção/geração de thumb (`selection_method` e `generation_method` ∈ {`ai`, `local`}).
 - **`CaptionBurnResult`** — wrapper Path-like com `captions_applied` + `warning`.
+- **`MusicTrack`** — faixa do acervo local (`video_id`, `name`, `source_url`, `local_path`, `mood`, `duration_s`).
+- **`SyncReport`** — saída do `youcut music sync` (`new_tracks`, `cached_tracks`, `failed_tracks`, `failed_details`).
 
 ---
 
@@ -314,7 +337,10 @@ output/
 
 ~/.youcut/
 ├─ credentials/{youtube,instagram,tiktok}.json
-└─ sessions/<session_id>.json
+├─ sessions/<session_id>.json
+└─ music/
+   ├─ index.json                     # acervo local sincronizado da playlist YouTube
+   └─ tracks/<video_id>.m4a
 ```
 
 ---

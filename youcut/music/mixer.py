@@ -1,4 +1,4 @@
-"""Mixagem de trilha sonora em clipes sociais via ffmpeg com duck automático."""
+"""Mixagem de trilha sonora em clipes sociais com padrão fixo de produto."""
 from __future__ import annotations
 
 import logging
@@ -6,22 +6,30 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from youcut.config import PipelineConfig
 from youcut.models import MusicTrack
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("youcut.music.mixer")
 
 
 class MusicMixer:
-    """Aplica uma faixa musical a um clipe MP4 com duck automático na fala."""
+    """Aplica trilha sonora a um clipe social com padrão fixo (RF-16 a RF-21).
 
-    def mix(self, clip_path: Path, track: MusicTrack, config: PipelineConfig) -> Path:
+    Regra única (não configurável por execução):
+    - Skip dos primeiros 10s da música (RF-16);
+    - Fade-in 1.0s e fade-out 1.2s (RF-17/18);
+    - Voz original em volume integral (RF-19);
+    - Música a 55% (RF-20);
+    - Limitador final em 0.97 (RF-21).
+    """
+
+    def mix(self, clip_path: Path, track: MusicTrack) -> Path:
         """Aplica trilha ao clipe via ffmpeg. Retorna path do arquivo final.
 
-        Se ffmpeg falhar, loga o erro e retorna clip_path original sem música.
+        Em caso de falha do ffmpeg, loga ERROR e retorna `clip_path` original
+        (mesmo comportamento do mixer anterior, sem trilha aplicada).
         """
-        dur = self._get_clip_duration(clip_path)
-        filter_graph = self._build_filter_graph(dur, config)
+        clip_dur = self._get_clip_duration(clip_path)
+        filter_graph = self._build_filter_graph(clip_dur)
 
         with tempfile.NamedTemporaryFile(
             suffix=".mp4",
@@ -51,25 +59,34 @@ class MusicMixer:
             )
             tmp_path.unlink(missing_ok=True)
             return clip_path
+        except FileNotFoundError as exc:
+            logger.error("ffmpeg não encontrado no PATH: %s", exc)
+            tmp_path.unlink(missing_ok=True)
+            return clip_path
 
-        # Substituir arquivo original pela versão com trilha (atomico no mesmo fs)
         try:
             tmp_path.replace(clip_path)
-        except OSError as e:
-            logger.error("Falha ao substituir clipe com versão mixada: %s", e)
+        except OSError as exc:
+            logger.error("Falha ao substituir clipe com versão mixada: %s", exc)
             tmp_path.unlink(missing_ok=True)
             return clip_path
         return clip_path
 
-    def _build_filter_graph(self, clip_dur: float, config: PipelineConfig) -> str:
-        fade_start = max(0.0, clip_dur - 2.0)
-        # Música em volume fixo sobre o áudio original sem alterar a voz
+    def _build_filter_graph(self, clip_dur: float) -> str:
+        """Filter graph fixo conforme techspec §Filter Graph (RF-16 a RF-21)."""
+        fade_out_start = max(0.0, clip_dur - 1.2)
         return (
-            f"[1:a]aloop=loop=-1:size=2000000000,"
+            "[1:a]"
+            "atrim=start=10,asetpts=PTS-STARTPTS,"
+            "apad,"
             f"atrim=0:{clip_dur},"
-            f"afade=t=out:st={fade_start}:d=2,"
-            f"volume={config.music_volume}[music];"
-            f"[0:a][music]amix=inputs=2:duration=first:normalize=0[aout]"
+            "afade=t=in:st=0:d=1.0,"
+            f"afade=t=out:st={fade_out_start}:d=1.2,"
+            "volume=0.55"
+            "[m];"
+            "[0:a][m]amix=inputs=2:duration=first:normalize=0,"
+            "alimiter=limit=0.97"
+            "[aout]"
         )
 
     def _get_clip_duration(self, clip_path: Path) -> float:
@@ -87,7 +104,7 @@ class MusicMixer:
                 timeout=10,
             )
             return float(result.stdout.strip())
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             logger.warning(
                 "Não foi possível obter duração do clipe '%s': %s. Usando 60s como fallback.",
                 clip_path.name, exc,

@@ -10,7 +10,14 @@ def export_metadata(
     index: int,
     output_dir: Path,
     music_track: MusicTrack | None = None,
+    music_requested: bool = False,
 ) -> Path:
+    """Escreve `clip_NN.txt` com metadados editoriais e a seção TRILHA SONORA.
+
+    - Se `music_track` está presente, exibe nome + `Fonte: YouTube (<source_url>)` (RF-22).
+    - Se `music_track` está ausente mas `music_requested=True`, registra explicitamente
+      a ausência da trilha com instrução para rodar a sync (RF-23).
+    """
     if index < 0:
         raise ValueError(f"index must be >= 0, got {index}")
 
@@ -46,7 +53,13 @@ def export_metadata(
             f"\n"
             f"TRILHA SONORA\n"
             f"Nome: {music_track.name}\n"
-            f"Fonte: {music_track.pixabay_url}\n"
+            f"Fonte: YouTube ({music_track.source_url})\n"
+        )
+    elif music_requested:
+        content += (
+            "\n"
+            "TRILHA SONORA\n"
+            "Trilha: nenhuma (acervo vazio — rode 'youcut music sync')\n"
         )
 
     output_path.write_text(content, encoding="utf-8")

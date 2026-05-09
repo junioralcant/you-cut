@@ -148,11 +148,12 @@ def test_viral_score_format(tmp_path):
 
 
 def test_export_metadata_with_music_track(sample_clip, tmp_path):
-    """clip_NN.txt com MusicTrack preenchido deve conter seção TRILHA SONORA."""
+    """RF-22: clip_NN.txt com MusicTrack deve conter `Fonte: YouTube (<source_url>)`."""
     track = MusicTrack(
+        video_id="vidU1",
         name="Upbeat Morning",
-        pixabay_url="https://pixabay.com/music/upbeat-morning-123/",
-        local_path=tmp_path / "track.mp3",
+        source_url="https://www.youtube.com/watch?v=vidU1",
+        local_path=tmp_path / "vidU1.m4a",
         mood="motivacional",
         duration_s=120.0,
     )
@@ -161,23 +162,38 @@ def test_export_metadata_with_music_track(sample_clip, tmp_path):
 
     assert "TRILHA SONORA" in content
     assert "Upbeat Morning" in content
-    assert "https://pixabay.com/music/upbeat-morning-123/" in content
+    assert "Fonte: YouTube" in content
+    assert "https://www.youtube.com/watch?v=vidU1" in content
 
 
-def test_export_metadata_without_music_track(sample_clip, tmp_path):
-    """clip_NN.txt sem MusicTrack não deve conter seção TRILHA SONORA."""
+def test_export_metadata_without_music_and_not_requested(sample_clip, tmp_path):
+    """Sem trilha e sem `music_requested=True` → seção TRILHA SONORA fica fora."""
     result = export_metadata(sample_clip, index=0, output_dir=tmp_path, music_track=None)
     content = result.read_text(encoding="utf-8")
 
     assert "TRILHA SONORA" not in content
-    # Conteúdo original deve estar presente (sem regressão)
     assert sample_clip.title in content
     assert sample_clip.description in content
 
 
+def test_export_metadata_music_requested_but_no_track(sample_clip, tmp_path):
+    """RF-23: música pedida (--music) mas sem trilha → registra ausência explicitamente."""
+    result = export_metadata(
+        sample_clip,
+        index=0,
+        output_dir=tmp_path,
+        music_track=None,
+        music_requested=True,
+    )
+    content = result.read_text(encoding="utf-8")
+
+    assert "TRILHA SONORA" in content
+    assert "Trilha: nenhuma" in content
+    assert "youcut music sync" in content
+
+
 def test_export_metadata_existing_tests_still_pass(sample_clip, tmp_path):
-    """Verificar que a assinatura com music_track=None é retrocompatível."""
-    # Chamada sem o parâmetro music_track (omitido) deve funcionar igual
+    """Compatibilidade: chamada sem novos parâmetros continua válida."""
     result = export_metadata(sample_clip, index=0, output_dir=tmp_path)
     content = result.read_text(encoding="utf-8")
 

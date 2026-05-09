@@ -26,8 +26,9 @@ from youcut.config import PipelineConfig
 from youcut.downloader import VideoDownloadError, download_video
 from youcut.exporter import export_metadata
 from youcut.models import CaptionBurnResult, ClipRecord, CutMode, MusicTrack, SessionData, TranscriptionResult, ViralClip
-from youcut.music_mixer import MusicMixer
-from youcut.music_provider import PixabayMusicProvider
+from youcut.music.library import MusicLibrary
+from youcut.music.mixer import MusicMixer
+from youcut.music.provider import YouTubeMusicProvider
 from youcut.preview import generate_clip_preview
 from youcut.reviewer import review_clips
 from youcut.selector import prompt_clip_selection
@@ -53,8 +54,10 @@ app_auth = typer.Typer(help="Gerencia autenticação das plataformas de upload")
 app.add_typer(app_auth, name="auth")
 
 from youcut.comic.cli import comic_command  # noqa: E402
+from youcut.music.cli import app_music  # noqa: E402
 
 app.command(name="comic", help="Gera motion comics 9:16 a partir de vídeos curtos (≤120s).")(comic_command)
+app.add_typer(app_music, name="music")
 
 
 @app.callback()
@@ -1270,7 +1273,6 @@ def run_flow_c(
     platforms: list[str] | None = None,
     auth_config: YtDlpAuthConfig | None = None,
     music: bool = False,
-    music_mood: Optional[str] = None,
 ) -> None:
     """Fluxo C: vídeos curtos diretamente do vídeo original (9:16 para redes sociais)."""
     progress = Progress(
@@ -1318,8 +1320,19 @@ def run_flow_c(
         if config.cut_mode == "youtube":
             _show_youtube_duration_guidance(viral_clips)
 
-        music_provider = PixabayMusicProvider(config) if (music and config.cut_mode == "social") else None
-        music_mixer = MusicMixer() if (music and config.cut_mode == "social") else None
+        music_enabled = bool(music and config.cut_mode == "social")
+        music_library: MusicLibrary | None = None
+        music_provider: YouTubeMusicProvider | None = None
+        music_mixer: MusicMixer | None = None
+        if music_enabled:
+            music_library = MusicLibrary()
+            music_library.load()
+            if music_library.is_empty():
+                _console.print(
+                    "[yellow]⚠️  Acervo de músicas vazio. Rode 'youcut music sync' para popular o acervo.[/yellow]"
+                )
+            music_provider = YouTubeMusicProvider(music_library)
+            music_mixer = MusicMixer()
         music_tracks: list[MusicTrack | None] = []
 
         clip_paths: list[Path] = []
@@ -1354,19 +1367,19 @@ def run_flow_c(
 
                 # Etapa de trilha sonora (apenas modo social)
                 track: MusicTrack | None = None
-                if music and music_provider and music_mixer and config.cut_mode == "social":
+                if music_enabled and music_provider and music_mixer:
                     progress.stop()
                     try:
-                        mood = music_mood if music_mood else music_provider.classify_mood(clip)
-                        _console.print(f"🎵 Detectando mood: {mood}...")
-                        clip_dur = clip.end_time - clip.start_time
-                        track = music_provider.fetch_track(mood, clip_dur)
+                        track = music_provider.pick_track(clip)
                         if track:
-                            _console.print(f'🎵 Trilha: "{track.name}" — Pixabay Music')
-                            clip_path = music_mixer.mix(clip_path, track, config)
+                            _console.print(
+                                f'🎵 Trilha: "{track.name}" — YouTube (mood={track.mood})'
+                            )
+                            clip_path = music_mixer.mix(clip_path, track)
                         else:
                             _console.print(
-                                f'[yellow]⚠️  Nenhuma música encontrada para o mood "{mood}". Clipe gerado sem trilha.[/yellow]'
+                                "[yellow]⚠️  Sem trilha para este clipe (acervo vazio). "
+                                "Rode 'youcut music sync' para popular o acervo.[/yellow]"
                             )
                     finally:
                         progress.start()
@@ -1386,7 +1399,13 @@ def run_flow_c(
     for i, (clip, clip_path) in enumerate(zip(viral_clips, clip_paths)):
         captions_applied, caption_warning = caption_statuses[i] if i < len(caption_statuses) else (True, None)
         track = music_tracks[i] if i < len(music_tracks) else None
-        export_metadata(clip, i, output_dir, music_track=track)
+        export_metadata(
+            clip,
+            i,
+            output_dir,
+            music_track=track,
+            music_requested=music_enabled,
+        )
         clip_records.append(ClipRecord(
             title=clip.title,
             start_time=clip.start_time,
@@ -1711,7 +1730,6 @@ def cuts(
     log_level: str = typer.Option("INFO", "--log-level", help="Nível de log"),
     log_file: Optional[Path] = typer.Option(None, "--log-file", help="Arquivo de log"),
     music: bool = typer.Option(False, "--music", help="Adicionar trilha sonora automática (apenas modo social)"),
-    music_mood: Optional[str] = typer.Option(None, "--music-mood", help="Override manual do mood musical (ex: reflexivo, energico)"),
     mode: Optional[str] = typer.Option(None, "--mode", help="Modo de corte: social ou youtube (pula seleção interativa)"),
     yes: bool = typer.Option(False, "--yes", "-y", help="Confirmar automaticamente todas as perguntas interativas"),
 ) -> None:
@@ -1856,5 +1874,4 @@ def cuts(
             platforms=selected_platforms,
             auth_config=auth_config,
             music=music,
-            music_mood=music_mood,
         )

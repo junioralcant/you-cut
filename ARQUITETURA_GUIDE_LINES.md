@@ -230,8 +230,8 @@
 ### 2.8 Persistência e Exportação
 
 #### `youcut/exporter.py`
-- **Função:** escreve `clip_NN.txt` com título, descrição, hashtags, ideia de thumbnail, score viral e motivo da seleção.
-- **APIs públicas:** `export_metadata(clip, index, output_dir)`.
+- **Função:** escreve `clip_NN.txt` com título, descrição, hashtags, ideia de thumbnail, score viral e motivo da seleção. Quando há `MusicTrack` cita `Fonte: YouTube (<source_url>)`; quando o usuário pediu `--music` mas não há trilha (acervo vazio), registra `Trilha: nenhuma (acervo vazio — rode 'youcut music sync')`.
+- **APIs públicas:** `export_metadata(clip, index, output_dir, music_track=None, music_requested=False)`.
 - **Pipeline:** metadados.
 
 #### `youcut/session_store.py`
@@ -241,7 +241,49 @@
 
 ---
 
-## 3. Subpacote `youcut/uploader/`
+## 3. Subpacote `youcut/music/`
+
+> Trilha sonora automática (modo `social`) via playlist curada do YouTube. Sincronização sob comando manual; pipeline de geração reusa apenas o cache local. Substitui o backend Jamendo legado.
+
+#### `youcut/music/__init__.py`
+- **Função:** marker de pacote.
+
+#### `youcut/music/library.py`
+- **Função:** persistência atômica do índice `~/.youcut/music/index.json` (schema_version=1). Idempotente por `video_id`.
+- **APIs públicas:** `MusicLibrary(root)`, `load()`, `save()`, `has(video_id)`, `add(MusicTrack)`, `candidates_for(mood)`, `all_tracks()`, `is_empty()`, `set_playlist_url(url)`.
+- **Pipeline:** sync + geração.
+
+#### `youcut/music/classifier.py`
+- **Função:** 1 chamada Claude texto + `tools` com schema fechado nos 6 moods canônicos. Falha de API ou mood inválido → `None` (faixa cai como `"indefinido"` — RF-09).
+- **APIs públicas:** `TrackMoodClassifier(config)`, `classify(title, description, tags)`.
+- **Dependências externas:** `anthropic`.
+- **Pipeline:** sync.
+
+#### `youcut/music/sync.py`
+- **Função:** enumera playlist via `yt_dlp.YoutubeDL` (`extract_flat="in_playlist"`), baixa apenas faixas ausentes (`format=bestaudio/best` + `FFmpegExtractAudio` m4a), classifica via Claude, persiste no índice. Falha individual conta em `failed_tracks` e não aborta. Reusa `YtDlpAuthConfig` (cookies).
+- **APIs públicas:** `PlaylistSyncer(lib, classifier)`, `sync(playlist_url) -> SyncReport`.
+- **Dependências externas:** `yt-dlp`, `ffmpeg`.
+- **Pipeline:** sync.
+
+#### `youcut/music/cli.py`
+- **Função:** subcomando Typer `youcut music sync [--playlist URL] [--dry-run]`. Renderiza `SyncReport` como tabela `rich`.
+- **APIs públicas:** `app_music` (Typer instance), comando `sync`.
+- **Pipeline:** CLI.
+
+#### `youcut/music/provider.py`
+- **Função:** consumidor da `MusicLibrary` em runtime de geração. `classify_mood` preserva 100% a heurística por keywords pt-BR; `pick_track` é determinístico via SHA-256(title+reason+social_visual_style) % len(candidates) (RF-12/15). Fallback global em `all_tracks()` quando o mood do clipe não tem candidatos (RF-13). Acervo vazio → `None` (RF-14).
+- **APIs públicas:** `YouTubeMusicProvider(library)`, `classify_mood(clip)`, `pick_track(clip)`.
+- **Pipeline:** geração.
+
+#### `youcut/music/mixer.py`
+- **Função:** aplica trilha ao clipe via ffmpeg com filter graph fixo (RF-16 a RF-21): `[1:a] atrim=start=10, asetpts=PTS-STARTPTS, apad, atrim=0:{clip_dur}, afade=t=in:st=0:d=1.0, afade=t=out:st={clip_dur-1.2}:d=1.2, volume=0.55 [m]; [0:a][m] amix=inputs=2:duration=first:normalize=0, alimiter=limit=0.97 [aout]`. Voz `[0:a]` entra no `amix` sem `volume=` (preserva integralidade). `-c:v copy`. Falha do ffmpeg → log ERROR + retorna `clip_path` original. **Não importa `PipelineConfig`** (regra fixa de produto).
+- **APIs públicas:** `MusicMixer.mix(clip_path, track) -> Path`.
+- **Dependências externas:** `ffmpeg`.
+- **Pipeline:** geração.
+
+---
+
+## 4. Subpacote `youcut/uploader/`
 
 > Cada plataforma implementa a interface `Uploader`. O orquestrador compartilha autenticação e relatório.
 
@@ -290,14 +332,14 @@
 
 ---
 
-## 4. Assets
+## 5. Assets
 
 #### `youcut/assets/Roboto-Regular.ttf`
 - Fonte padrão para legendas (`captioner.py`), title overlays (`title_overlay.py`) e tarja editorial (`social_composer.py`).
 
 ---
 
-## 5. Configuração & Documentação Externa
+## 6. Configuração & Documentação Externa
 
 #### `pyproject.toml`
 - **Build:** `hatchling`. **Entrypoint:** `youcut = "youcut.cli:app"`.
@@ -322,7 +364,7 @@
 
 ---
 
-## 6. Diretórios de Apoio
+## 7. Diretórios de Apoio
 
 #### `tests/` (~46 arquivos)
 - Organizados por **prefixo temático**: `test_analyzer*`, `test_caption*`, `test_clipper*`, `test_diarizer*`, `test_face_tracker*`, `test_downloader*`, `test_yt_dlp_auth*`, `test_transcriber*`, `test_uploader_*`, `test_social_*`, `test_pipeline*`, `test_cli`, `test_config`, `test_models`, `test_exporter`, `test_preview`. Inclui suites `*_integration*` com marker `integration` (FFmpeg real). Fixtures compartilhadas em `conftest.py` e `create_fixtures.py`.
@@ -359,7 +401,7 @@
 
 ---
 
-## 5b. Subpacote `youcut/comic/` (motion comic)
+## 8. Subpacote `youcut/comic/` (motion comic)
 
 Pipeline isolado que converte vídeos curtos (≤120 s) em motion comics 9:16 reusando Whisper, Claude e adicionando `gpt-image-1` (imagens) + Runway `gen4_turbo` (image-to-video).
 
@@ -387,7 +429,7 @@ Pipeline isolado que converte vídeos curtos (≤120 s) em motion comics 9:16 re
 
 ---
 
-## 7. Cheatsheet de Contratos Importantes
+## 9. Cheatsheet de Contratos Importantes
 
 - **Cache de transcrição** é endereçado por **MD5 do vídeo**. Renomear o arquivo *não* invalida o cache; alterar bytes invalida.
 - **Modo `youtube`** = stream copy (`-c copy`), 16:9, sem face tracking nem composição social. Thumbnails via DALL·E.

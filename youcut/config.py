@@ -99,14 +99,10 @@ class PipelineConfig(BaseSettings):
     comic_scenes_emit_no_subs_version: bool = True  # gera também versão sem legendas
     comic_scenes_style_ref_image: Path | None = None  # imagem de referência canônica (opcional)
 
-    # ── Trilha Sonora Automática ──────────────────────────────────────────────
-    pixabay_api_key: str | None = None  # legado — não utilizado
-    jamendo_client_id: str | None = None
-    music_volume: float = 0.25
-    music_duck_threshold: float = 0.015
-    music_duck_ratio: float = 6.0
-    music_duck_attack_ms: float = 200.0
-    music_duck_release_ms: float = 1000.0
+    # ── Trilha Sonora — Playlist Curada do YouTube ────────────────────────────
+    youtube_music_playlist_url: str = (
+        "https://www.youtube.com/playlist?list=PLrAXtmRdnEQzAHKFQJX4D7QAR0o0eEdQy"
+    )
 
     @model_validator(mode="after")
     def validate_api_key_present(self) -> "PipelineConfig":
