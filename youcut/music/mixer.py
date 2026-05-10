@@ -20,7 +20,7 @@ class MusicMixer:
     - Voz original em volume integral (RF-19) — sidechain ducking abaixa a
       música automaticamente quando há voz, então o limitador raramente atua
       sobre o sinal vocal;
-    - Música a 55% nos silêncios da voz (RF-20);
+    - Música a 12% nos silêncios da voz (RF-20);
     - Limitador final em 0.97 como rede de segurança (RF-21).
     """
 
@@ -78,9 +78,10 @@ class MusicMixer:
         """Filter graph fixo conforme techspec §Filter Graph (RF-16 a RF-21).
 
         A voz é duplicada (asplit): uma cópia entra no mix final em volume
-        integral, a outra atua como gatilho de ducking sobre a música via
-        sidechaincompress. Isso preserva a inteligibilidade da voz mesmo
-        com música ao fundo.
+        integral SEM passar por nenhum processador, a outra atua como gatilho
+        de ducking sobre a música via sidechaincompress. O alimiter é aplicado
+        apenas no ramo da música (rede de segurança contra picos da trilha) —
+        nunca toca o sinal vocal, garantindo voz original 100% preservada.
         """
         fade_out_start = max(0.0, clip_dur - 1.2)
         return (
@@ -91,13 +92,13 @@ class MusicMixer:
             f"atrim=0:{clip_dur},"
             "afade=t=in:st=0:d=1.0,"
             f"afade=t=out:st={fade_out_start}:d=1.2,"
-            "volume=0.55"
+            "volume=0.12"
             "[m];"
             "[m][voice_sc]"
-            "sidechaincompress=threshold=0.05:ratio=8:attack=5:release=250"
-            "[m_ducked];"
-            "[voice][m_ducked]amix=inputs=2:duration=first:normalize=0,"
+            "sidechaincompress=threshold=0.05:ratio=8:attack=5:release=250,"
             "alimiter=limit=0.97"
+            "[m_safe];"
+            "[voice][m_safe]amix=inputs=2:duration=first:normalize=0"
             "[aout]"
         )
 

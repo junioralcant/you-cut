@@ -76,11 +76,11 @@ class TestFilterGraph:
         # fade out começa em clip_dur - 1.2 = 8.8
         assert "afade=t=out:st=8.8:d=1.2" in joined
 
-    def test_contains_volume_55(self, tmp_path):
-        """RF-20: música a 55%."""
+    def test_contains_volume_12(self, tmp_path):
+        """RF-20: música a 12%."""
         cmd = _capture_cmd(tmp_path)
         joined = " ".join(cmd)
-        assert "volume=0.55" in joined
+        assert "volume=0.12" in joined
 
     def test_contains_alimiter_97(self, tmp_path):
         """RF-21: limitador final em 0.97."""

@@ -10,8 +10,8 @@ from youcut.models import TranscriptionResult, ViralClip, WordTimestamp
 logger = logging.getLogger(__name__)
 
 _WORD_STYLE = (
-    "Style: Default,Arial,80,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,"
-    "-1,0,0,0,100,100,0,0,1,4,1,5,10,10,800,1"
+    "Style: Default,Arial,110,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,"
+    "-1,0,0,0,100,100,0,0,1,5,1,8,10,10,820,1"
 )
 _PHRASE_STYLE = (
     "Style: Default,Arial,60,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,"
