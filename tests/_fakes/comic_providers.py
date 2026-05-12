@@ -42,6 +42,7 @@ class FakeImageProvider:
         reference_images: list[Path] | None = None,
         size: str = "1024x1024",
         input_fidelity: str = "high",
+        quality: str = "low",
     ) -> bytes:
         try:
             w, h = (int(p) for p in size.lower().split("x"))
@@ -54,6 +55,7 @@ class FakeImageProvider:
                 "reference_images": [Path(r) for r in (reference_images or [])],
                 "size": (w, h),
                 "input_fidelity": input_fidelity,
+                "quality": quality,
             }
         )
 

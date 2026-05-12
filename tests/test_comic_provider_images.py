@@ -55,10 +55,11 @@ def test_provider_uses_edit_when_reference_images_present(tmp_path):
     fake_client.images.generate.assert_not_called()
     fake_client.images.edit.assert_called_once()
     kwargs = fake_client.images.edit.call_args.kwargs
-    assert kwargs["model"] == "gpt-image-1"
+    assert kwargs["model"] == "gpt-image-1.5"
     assert kwargs["prompt"] == "desenha"
     assert kwargs["size"] == "1024x1024"
     assert kwargs["input_fidelity"] == "high"
+    assert kwargs["quality"] == "low"
     assert isinstance(kwargs["image"], list)
 
 

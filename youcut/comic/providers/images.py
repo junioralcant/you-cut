@@ -2,7 +2,8 @@
 
 Define o Protocol :class:`ImageProvider` e a implementação concreta
 :class:`OpenAIImageProvider` baseada no SDK ``openai>=1`` com modelo
-``gpt-image-1`` e ``input_fidelity="high"`` quando há referências.
+``gpt-image-1.5`` (``quality="low"`` por padrão para reduzir custo) e
+``input_fidelity="high"`` quando há referências.
 
 Reaplica retry com backoff exponencial respeitando ``comic_image_retries``.
 """
@@ -40,6 +41,7 @@ class ImageProvider(Protocol):
         reference_images: list[Path] | None = None,
         size: str = DEFAULT_SIZE,
         input_fidelity: str = "high",
+        quality: str = "low",
     ) -> bytes: ...
 
 
@@ -58,7 +60,7 @@ class OpenAIImageProvider:
     ``client.images.edit(...)``).
     """
 
-    DEFAULT_MODEL: str = "gpt-image-1"
+    DEFAULT_MODEL: str = "gpt-image-1.5"
 
     def __init__(
         self,
@@ -97,6 +99,7 @@ class OpenAIImageProvider:
         reference_images: list[Path] | None = None,
         size: str = DEFAULT_SIZE,
         input_fidelity: str = "high",
+        quality: str = "low",
     ) -> bytes:
         if not prompt or not prompt.strip():
             raise ImageGenerationError("prompt vazio não é permitido para geração de imagem.")
@@ -113,11 +116,13 @@ class OpenAIImageProvider:
                         reference_images=reference_images,
                         size=size,
                         input_fidelity=input_fidelity,
+                        quality=quality,
                     )
                 return self._call_generate(
                     client,
                     prompt=prompt,
                     size=size,
+                    quality=quality,
                 )
             except Exception as exc:
                 last_exc = exc
@@ -136,11 +141,12 @@ class OpenAIImageProvider:
             f"Falha ao gerar imagem após {self._max_retries + 1} tentativas: {last_exc}"
         ) from last_exc
 
-    def _call_generate(self, client: Any, *, prompt: str, size: str) -> bytes:
+    def _call_generate(self, client: Any, *, prompt: str, size: str, quality: str) -> bytes:
         response = client.images.generate(
             model=self._model,
             prompt=prompt,
             size=size,
+            quality=quality,
             n=1,
         )
         return self._extract_png_bytes(response)
@@ -153,6 +159,7 @@ class OpenAIImageProvider:
         reference_images: list[Path],
         size: str,
         input_fidelity: str,
+        quality: str,
     ) -> bytes:
         opened: list[Any] = []
         try:
@@ -169,6 +176,7 @@ class OpenAIImageProvider:
                 prompt=prompt,
                 size=size,
                 input_fidelity=input_fidelity,
+                quality=quality,
                 n=1,
             )
             return self._extract_png_bytes(response)
