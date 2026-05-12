@@ -10,8 +10,12 @@ from pathlib import Path
 import anthropic
 from PIL import Image, ImageDraw, ImageFont
 
+from dataclasses import dataclass
+from typing import Literal
+
 from youcut.config import PipelineConfig
-from youcut.models import ViralClip
+from youcut.face_tracker import _BBox  # bbox tuple usado pelos crops dual
+from youcut.models import TranscriptionResult, ViralClip, WordTimestamp
 from youcut.social_band_styles import BandStyle, PRESETS, select_band_style
 from youcut.thumbnail_generator import (
     _build_ai_clients,
@@ -97,11 +101,183 @@ def resolve_title_band_colors(config: PipelineConfig) -> tuple[str, str]:
     return config.social_layout_title_bg_color, config.social_layout_title_text_color
 
 
+# --- alternating_image: dimensões fixas do split 60/40 ---
+_ALT_IMG_HEIGHT = 768           # 40% de 1920 — imagem IA
+_ALT_SPEAKER_HEIGHT = 1152      # 60% de 1920 — speaker face-tracked
+# Quando a imagem está no topo, o speaker começa em y=_ALT_IMG_HEIGHT.
+# Quando a imagem está no rodapé, o speaker começa em y=0 e a imagem em
+# y=_ALT_SPEAKER_HEIGHT.
+
+_ALT_SHOT_MIN_S = 2.5
+_ALT_SHOT_MAX_S = 7.0
+_ALT_SHOT_GAP_BREAK_S = 0.4
+
+
+@dataclass(frozen=True)
+class _AltShot:
+    start: float
+    end: float
+    # 'top'/'bottom': imagem IA em cima/embaixo, speaker preenche o resto.
+    # 'dual': dois falantes ativos — empilhados vertical, sem imagem.
+    layout: Literal["top", "bottom", "dual"]
+
+    # Compat: muito código antigo lê .image_position; mantemos o alias.
+    @property
+    def image_position(self) -> Literal["top", "bottom"]:
+        return "top" if self.layout != "bottom" else "bottom"
+
+
+def _mark_dual_shots(
+    raw_layouts: list[Literal["top", "bottom"]],
+    raw_spans: list[tuple[float, float]],
+    activity_per_cluster: dict[int, list[tuple[float, float]]],
+    *,
+    min_activity_per_cluster_s: float = 0.1,
+    context_neighbors: int = 1,
+) -> list[Literal["top", "bottom", "dual"]]:
+    """Promove shots a layout='dual' em modo diálogo.
+
+    Regra:
+    - Se AMBOS os clusters tiveram ≥``min_activity_per_cluster_s`` de fala
+      dentro do shot → dual.
+    - Senão: se UM cluster falou no shot E o OUTRO cluster falou em algum
+      shot vizinho (até ±``context_neighbors``) → ainda assim dual.
+      Captura "modo diálogo" em turn-taking lento (podcast), onde um fala
+      por shot inteiro mas a conversa está claramente acontecendo.
+    """
+    if len(activity_per_cluster) < 2:
+        return list(raw_layouts)
+
+    # Pré-computa atividade de cada cluster por shot.
+    n = len(raw_spans)
+    per_shot_active: list[set[int]] = []
+    for s, e in raw_spans:
+        active: set[int] = set()
+        for cid, intervals in activity_per_cluster.items():
+            total = sum(max(0.0, min(e, de) - max(s, ds)) for ds, de in intervals)
+            if total >= min_activity_per_cluster_s:
+                active.add(cid)
+        per_shot_active.append(active)
+
+    out: list[Literal["top", "bottom", "dual"]] = []
+    for i, layout in enumerate(raw_layouts):
+        active = per_shot_active[i]
+        if len(active) >= 2:
+            out.append("dual")
+            continue
+        if active:
+            # Verifica se o OUTRO cluster falou num shot vizinho.
+            neighbors = set()
+            for j in range(max(0, i - context_neighbors), min(n, i + context_neighbors + 1)):
+                if j == i:
+                    continue
+                neighbors |= per_shot_active[j]
+            if (neighbors - active):  # algum cluster falou perto, diferente do atual
+                out.append("dual")
+                continue
+        out.append(layout)
+    return out
+
+
+def _plan_alternating_shots(
+    words: list[WordTimestamp],
+    clip_duration: float,
+    activity_per_cluster: dict[int, list[tuple[float, float]]] | None = None,
+) -> list[_AltShot]:
+    """Planeja shots a partir de pausas de fala, alternando posição da imagem.
+
+    Quando ``dual_intervals`` cobre >50% de um shot, o shot vira ``layout='dual'``
+    (dois falantes empilhados, sem imagem).
+
+    Função pura, testável em isolado. Sem palavras → 1 shot único.
+    """
+    if not words or clip_duration <= 0:
+        return [_AltShot(start=0.0, end=clip_duration or 0.0, layout="top")]
+
+    # 1) Quebra por gap > GAP_BREAK_S OU duração acumulada >= MAX_S.
+    raw_shots: list[tuple[float, float]] = []
+    shot_start = max(0.0, words[0].start)
+    for i, w in enumerate(words):
+        next_gap = (
+            words[i + 1].start - w.end if i + 1 < len(words) else float("inf")
+        )
+        shot_dur = w.end - shot_start
+        should_break = (
+            next_gap >= _ALT_SHOT_GAP_BREAK_S or shot_dur >= _ALT_SHOT_MAX_S
+        )
+        if should_break:
+            raw_shots.append((shot_start, w.end))
+            if i + 1 < len(words):
+                shot_start = words[i + 1].start
+
+    # 2) Funde shots muito curtos com o PRÓXIMO chunk (extend forward), nunca
+    # estende o shot anterior para trás. Garante MIN_S sem colapsar tudo num
+    # shot único quando há vários chunks curtos seguidos.
+    merged: list[tuple[float, float]] = []
+    pending: tuple[float, float] | None = None
+    for s, e in raw_shots:
+        if pending is not None:
+            ps, _ = pending
+            if (e - ps) >= _ALT_SHOT_MIN_S:
+                merged.append((ps, e))
+                pending = None
+            else:
+                pending = (ps, e)
+        elif (e - s) < _ALT_SHOT_MIN_S:
+            pending = (s, e)
+        else:
+            merged.append((s, e))
+    if pending is not None:
+        if merged:
+            ps_last, _ = merged[-1]
+            merged[-1] = (ps_last, pending[1])
+        else:
+            merged.append(pending)
+
+    # 3) Cobre o início (até o primeiro shot), gaps entre shots e o fim
+    # (após o último) — assim cada instante do clipe está num shot.
+    if merged:
+        first_s, first_e = merged[0]
+        if first_s > 0.05:
+            merged[0] = (0.0, first_e)
+        # Estende o fim de cada shot até o início do próximo (sem buracos).
+        for i in range(len(merged) - 1):
+            cs, ce = merged[i]
+            ns, ne = merged[i + 1]
+            if ce < ns:
+                merged[i] = (cs, ns)
+        last_s, last_e = merged[-1]
+        if last_e < clip_duration - 0.05:
+            merged[-1] = (last_s, clip_duration)
+    else:
+        merged = [(0.0, clip_duration)]
+
+    # 4) Alterna layout: par=top, ímpar=bottom (imagem IA).
+    raw_layouts: list[Literal["top", "bottom"]] = [
+        "top" if i % 2 == 0 else "bottom" for i in range(len(merged))
+    ]
+    # 5) Promove a 'dual' os shots onde AMBOS clusters tiveram fala (diálogo).
+    final_layouts = _mark_dual_shots(raw_layouts, merged, activity_per_cluster or {})
+
+    shots = [
+        _AltShot(start=s, end=e, layout=final_layouts[i])
+        for i, (s, e) in enumerate(merged)
+    ]
+    return shots
+
+
 def compose_social_clip(
     clip_path: Path,
     clip: ViralClip,
     config: PipelineConfig,
+    *,
+    transcription: TranscriptionResult | None = None,
+    source_clip_path: Path | None = None,
 ) -> Path:
+    if config.social_layout_mode == "alternating_image":
+        return _compose_alternating_image_clip(
+            clip_path, clip, config, transcription, source_clip_path
+        )
     output_dir = clip_path.parent
     label_text, suggested_color_mode = generate_social_label(clip, config)
     style = select_band_style(clip_path.stem)
@@ -173,6 +349,318 @@ def compose_social_clip(
         header_image_path.unlink(missing_ok=True)
 
     logger.info("Social composer: final clip generated at %s", output_path)
+    return output_path
+
+
+def _probe_clip_duration(clip_path: Path) -> float:
+    """Return duration (s) of *clip_path*; 0 on probe failure."""
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe", "-v", "error",
+                "-select_streams", "v:0",
+                "-show_entries", "stream=duration",
+                "-of", "csv=p=0",
+                str(clip_path),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return float(result.stdout.strip())
+    except (subprocess.CalledProcessError, ValueError, FileNotFoundError) as exc:
+        logger.warning("Social composer: falha ao probar duração de %s (%s)", clip_path.name, exc)
+        return 0.0
+
+
+def _extract_clip_local_words(
+    transcription: TranscriptionResult | None,
+    clip_start: float,
+    clip_end: float,
+) -> list[WordTimestamp]:
+    """Devolve palavras com timestamps relativos ao início do clipe (offset 0)."""
+    if transcription is None:
+        return []
+    local: list[WordTimestamp] = []
+    for seg in transcription.segments:
+        for w in seg.words:
+            if w.start >= clip_end or w.end <= clip_start:
+                continue
+            local.append(
+                WordTimestamp(
+                    word=w.word,
+                    start=max(0.0, w.start - clip_start),
+                    end=max(0.0, w.end - clip_start),
+                )
+            )
+    return local
+
+
+def _activity_per_cluster_from_analysis(
+    analysis: "SpeakerScenesAnalysis | None",
+) -> dict[int, list[tuple[float, float]]]:
+    """Devolve, por cluster, a lista de intervalos onde aquele cluster esteve
+    ativo (lip-sync). Reconstrói a partir das ``scenes`` da análise mapeando
+    cada bbox ativo de volta ao cluster_id pela ordem em ``cluster_bboxes``.
+    """
+    if analysis is None or not analysis.scenes:
+        return {}
+    bbox_to_cid = {b: i for i, b in enumerate(analysis.cluster_bboxes)}
+    activity: dict[int, list[tuple[float, float]]] = {
+        i: [] for i in range(len(analysis.cluster_bboxes))
+    }
+    for sc in analysis.scenes:
+        for b in sc.active_bboxes:
+            cid = bbox_to_cid.get(b)
+            if cid is not None:
+                activity[cid].append((sc.start_s, sc.end_s))
+    return activity
+
+
+def _build_dual_crop_filter(
+    bbox: "_BBox",
+    *,
+    src_w: int,
+    src_h: int,
+    target_w: int,
+    target_h: int,
+    face_height_fraction: float = 0.45,
+) -> str:
+    """Crop apertado do source ao redor do bbox, mantendo aspect target.
+
+    ``face_height_fraction`` controla quanto do crop é ocupado pelo rosto
+    verticalmente (default 0.45 = "talking head" estilo chamada de vídeo).
+    Centra no rosto, clampa nas bordas da fonte e escala pro target.
+    """
+    target_aspect = target_w / target_h
+    desired_h = max(1, int(round(bbox.h / max(0.05, face_height_fraction))))
+    crop_h = min(desired_h, src_h)
+    crop_w = int(round(crop_h * target_aspect))
+    if crop_w > src_w:
+        crop_w = src_w
+        crop_h = int(round(crop_w / target_aspect))
+    face_cx = bbox.x + bbox.w // 2
+    face_cy = bbox.y + bbox.h // 2
+    x_off = max(0, min(src_w - crop_w, face_cx - crop_w // 2))
+    y_off = max(0, min(src_h - crop_h, face_cy - crop_h // 2))
+    return f"crop={crop_w}:{crop_h}:{x_off}:{y_off},scale={target_w}:{target_h}"
+
+
+def _compose_alternating_image_clip(
+    clip_path: Path,
+    clip: ViralClip,
+    config: PipelineConfig,
+    transcription: TranscriptionResult | None,
+    source_clip_path: Path | None,
+) -> Path:
+    """Compõe um clipe 1080×1920 com speaker constante e imagem flutuando.
+
+    Layout fixo: speaker 60% (1152px), imagem 40% (768px). A imagem alterna
+    entre topo (y=0) e rodapé (y=1152) a cada shot definido por
+    ``_plan_alternating_shots``. Shots onde o ``speaker_framing`` detectou
+    2 falantes ativos são renderizados como **vertical stack** (50/50) usando
+    crops do ``source_clip_path``, sem imagem IA.
+    """
+    output_dir = clip_path.parent
+    label_text, _ = generate_social_label(clip, config)
+
+    # 1) Análise de speaker_framing (opcional). Roda só se source_clip_path
+    # foi passado e o módulo está disponível.
+    speaker_analysis = None
+    if source_clip_path is not None:
+        try:
+            from youcut.speaker_framing import analyze_speaker_scenes
+            speaker_analysis = analyze_speaker_scenes(source_clip_path, config)
+            if speaker_analysis is not None:
+                logger.info(
+                    "Social composer (alternating_image): %d cluster(s), %d cena(s) detectadas",
+                    len(speaker_analysis.cluster_bboxes),
+                    len(speaker_analysis.scenes),
+                )
+        except Exception as exc:
+            logger.warning(
+                "Social composer (alternating_image): speaker analysis falhou (%s); seguindo sem dual",
+                exc,
+            )
+
+    # 2) Gera UMA imagem IA reusando o pipeline existente.
+    top_image_path = generate_social_top_image(clip, output_dir, clip_path, config)
+    img_resized = _write_resized_png(
+        top_image_path.read_bytes(),
+        width=_CANVAS_W,
+        height=_ALT_IMG_HEIGHT,
+    )
+    top_image_path.unlink(missing_ok=True)
+
+    # 3) Probe + face-anchor do clipe já enquadrado.
+    src_w, src_h = _probe_video_dimensions(clip_path)
+    clip_duration = _probe_clip_duration(clip_path)
+    face_y_norm = _detect_face_y_norm(clip_path)
+
+    # 4) Planeja shots a partir de fronteiras de frase, promovendo shots
+    # dual quando há overlap com cenas de 2 falantes ativos.
+    words = _extract_clip_local_words(transcription, clip.start_time, clip.end_time)
+    activity_per_cluster = _activity_per_cluster_from_analysis(speaker_analysis)
+    shots = _plan_alternating_shots(words, clip_duration, activity_per_cluster)
+    dual_count = sum(1 for s in shots if s.layout == "dual")
+    logger.info(
+        "Social composer (alternating_image): %d shots (%d dual) — label=%r",
+        len(shots), dual_count, label_text,
+    )
+
+    # 5) Crop do speaker para 1080×1152 (modo single-speaker) com face-anchor.
+    framed_speaker_crop = _build_bottom_crop_filter(
+        src_w=src_w,
+        src_h=src_h,
+        target_w=_CANVAS_W,
+        target_h=_ALT_SPEAKER_HEIGHT,
+        face_y_norm=face_y_norm,
+    )
+
+    # 6) Resolve bboxes pros dual crops (ordem determinística: left → right).
+    dual_bbox_a = dual_bbox_b = None
+    source_dims: tuple[int, int] | None = None
+    if (
+        dual_count > 0
+        and speaker_analysis is not None
+        and len(speaker_analysis.cluster_bboxes) >= 2
+        and source_clip_path is not None
+    ):
+        ordered = sorted(speaker_analysis.cluster_bboxes, key=lambda b: b.x)
+        dual_bbox_a, dual_bbox_b = ordered[0], ordered[1]
+        source_dims = (speaker_analysis.frame_w, speaker_analysis.frame_h)
+
+    # Se dual_count > 0 mas não temos bboxes válidos, rebaixa shots dual a
+    # 'top' (fallback gracioso pra não quebrar a render).
+    if dual_count > 0 and (dual_bbox_a is None or dual_bbox_b is None):
+        shots = [
+            _AltShot(start=s.start, end=s.end, layout=("top" if s.layout == "dual" else s.layout))
+            for s in shots
+        ]
+        dual_count = 0
+
+    # 7) Monta filter_complex.
+    n_non_dual = sum(1 for s in shots if s.layout != "dual")
+    img_labels = [f"img{i}" for i in range(n_non_dual)]
+    framed_labels = [f"speaker{i}" for i in range(n_non_dual)]
+
+    filter_parts: list[str] = [
+        f"color=c=black:size={_CANVAS_W}x{_CANVAS_H}[base]",
+    ]
+    img_chain = (
+        f"[0:v]scale={_CANVAS_W}:{_ALT_IMG_HEIGHT}:force_original_aspect_ratio=increase,"
+        f"crop={_CANVAS_W}:{_ALT_IMG_HEIGHT}"
+    )
+    framed_chain = f"[1:v]{framed_speaker_crop}"
+    if n_non_dual == 1:
+        filter_parts.append(f"{img_chain},null[{img_labels[0]}]")
+        filter_parts.append(f"{framed_chain},null[{framed_labels[0]}]")
+    elif n_non_dual >= 2:
+        img_targets = "".join(f"[{lab}]" for lab in img_labels)
+        framed_targets = "".join(f"[{lab}]" for lab in framed_labels)
+        filter_parts.append(f"{img_chain},split={n_non_dual}{img_targets}")
+        filter_parts.append(f"{framed_chain},split={n_non_dual}{framed_targets}")
+    else:
+        # n_non_dual == 0: imagem e framed não são usados; descarta os inputs.
+        filter_parts.append(f"{img_chain},nullsink")
+        filter_parts.append(f"{framed_chain},nullsink")
+
+    # Source clip (input 2) só é necessário quando há shots dual.
+    if dual_count > 0 and source_dims is not None:
+        n_dual_uses = dual_count * 2
+        dual_raw_labels = [f"dualraw{i}" for i in range(n_dual_uses)]
+        dual_raw_targets = "".join(f"[{lab}]" for lab in dual_raw_labels)
+        if n_dual_uses == 1:
+            # Caso impossível na prática (dual sempre usa 2 crops), mas
+            # defensivo: não usar split=1.
+            filter_parts.append(f"[2:v]null[{dual_raw_labels[0]}]")
+        else:
+            filter_parts.append(f"[2:v]split={n_dual_uses}{dual_raw_targets}")
+        # Aplica crop por cluster — dual_a usa left bbox, dual_b usa right.
+        dual_a_filter = _build_dual_crop_filter(
+            dual_bbox_a,
+            src_w=source_dims[0], src_h=source_dims[1],
+            target_w=_CANVAS_W, target_h=_CANVAS_H // 2,
+        )
+        dual_b_filter = _build_dual_crop_filter(
+            dual_bbox_b,
+            src_w=source_dims[0], src_h=source_dims[1],
+            target_w=_CANVAS_W, target_h=_CANVAS_H // 2,
+        )
+
+    accum = "base"
+    non_dual_idx = 0
+    dual_idx = 0
+    for i, shot in enumerate(shots):
+        ts = f"{shot.start:.3f}"
+        te = f"{shot.end:.3f}"
+        enable = rf"between(t\,{ts}\,{te})"
+
+        if shot.layout == "dual":
+            # 2 crops do source, top=A, bottom=B; sem imagem.
+            raw_a = dual_raw_labels[dual_idx * 2]
+            raw_b = dual_raw_labels[dual_idx * 2 + 1]
+            cropped_a = f"dualA{dual_idx}"
+            cropped_b = f"dualB{dual_idx}"
+            filter_parts.append(f"[{raw_a}]{dual_a_filter}[{cropped_a}]")
+            filter_parts.append(f"[{raw_b}]{dual_b_filter}[{cropped_b}]")
+            tag_a = f"step{i}a"
+            tag_b = f"step{i}b"
+            filter_parts.append(
+                f"[{accum}][{cropped_a}]overlay=0:0:enable={enable}[{tag_a}]"
+            )
+            filter_parts.append(
+                f"[{tag_a}][{cropped_b}]overlay=0:{_CANVAS_H // 2}:enable={enable}[{tag_b}]"
+            )
+            accum = tag_b
+            dual_idx += 1
+        else:
+            img_y = 0 if shot.layout == "top" else _ALT_SPEAKER_HEIGHT
+            speaker_y = _ALT_IMG_HEIGHT if shot.layout == "top" else 0
+            tag_a = f"step{i}a"
+            tag_b = f"step{i}b"
+            filter_parts.append(
+                f"[{accum}][{img_labels[non_dual_idx]}]overlay=0:{img_y}:enable={enable}[{tag_a}]"
+            )
+            filter_parts.append(
+                f"[{tag_a}][{framed_labels[non_dual_idx]}]overlay=0:{speaker_y}:enable={enable}[{tag_b}]"
+            )
+            accum = tag_b
+            non_dual_idx += 1
+
+    filter_parts.append(f"[{accum}]null[v]")
+
+    filter_complex = ";".join(filter_parts)
+    output_path = clip_path.with_stem(clip_path.stem + "_social")
+
+    cmd = [
+        "ffmpeg",
+        "-loop", "1", "-i", str(img_resized),
+        "-i", str(clip_path),
+    ]
+    if dual_count > 0 and source_clip_path is not None:
+        cmd.extend(["-i", str(source_clip_path)])
+    cmd.extend([
+        "-filter_complex", filter_complex,
+        "-map", "[v]",
+        "-map", "1:a?",
+        "-c:v", "libx264",
+        "-c:a", "aac",
+        "-shortest",
+        "-y",
+        str(output_path),
+    ])
+
+    logger.info("Social composer (alternating_image): rendering %s", output_path.name)
+    try:
+        subprocess.run(cmd, check=True, capture_output=True)
+    except subprocess.CalledProcessError as exc:
+        stderr = exc.stderr.decode("utf-8", errors="replace")
+        logger.error("Social composer falhou (código %d): %s", exc.returncode, stderr)
+        raise
+    finally:
+        img_resized.unlink(missing_ok=True)
+
     return output_path
 
 

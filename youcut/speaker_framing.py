@@ -16,6 +16,7 @@ import shutil
 import subprocess
 import tempfile
 import urllib.request
+from dataclasses import dataclass
 from pathlib import Path
 from typing import NamedTuple
 
@@ -28,6 +29,26 @@ from youcut.face_tracker import (
     _compute_panel_crop_for_faces,
 )
 from youcut.models import CropRegion
+
+
+@dataclass(frozen=True)
+class SpeakerScene:
+    """Cena de fala: intervalo [start, end) em segundos no clip source, com os
+    bboxes (pixel-space original) dos clusters ATIVOS nesse intervalo."""
+    start_s: float
+    end_s: float
+    active_bboxes: tuple[_BBox, ...]
+
+
+@dataclass(frozen=True)
+class SpeakerScenesAnalysis:
+    """Saída da análise de fala. ``frame_w``/``frame_h`` são as dimensões do
+    source clip; ``scenes`` cobrem a duração total sem buracos."""
+    frame_w: int
+    frame_h: int
+    fps: float
+    cluster_bboxes: tuple[_BBox, ...]
+    scenes: tuple[SpeakerScene, ...]
 
 logger = logging.getLogger(__name__)
 
@@ -160,6 +181,71 @@ def frame_with_speaker_scenes(
 # ---------------------------------------------------------------------------
 # Model download
 # ---------------------------------------------------------------------------
+
+def analyze_speaker_scenes(
+    clip_path: Path,
+    config: PipelineConfig,
+) -> SpeakerScenesAnalysis | None:
+    """Roda só a etapa de **análise** do speaker framing — sem renderizar.
+
+    Retorna metadata (cluster bboxes em pixel-space do source + lista de cenas
+    com clusters ativos por intervalo). ``None`` quando o pipeline não pode
+    rodar (model ausente, MediaPipe quebrado, < 2 clusters, sem rostos).
+    """
+    model_path = _ensure_face_landmarker_model()
+    if model_path is None:
+        return None
+
+    try:
+        face_data = _collect_face_mesh_data(clip_path, model_path, config)
+    except Exception as exc:
+        logger.info("analyze_speaker_scenes: análise FaceLandmarker falhou (%s)", exc)
+        return None
+    if face_data is None:
+        return None
+
+    frame_w, frame_h, fps, frames = face_data
+    if frame_w <= 0 or frame_h <= 0 or not frames or fps <= 0:
+        return None
+
+    all_bboxes = [face.bbox for per_frame in frames for face in per_frame]
+    clusters = _identify_clusters_from_bboxes(all_bboxes)
+    if len(clusters) < 2:
+        return None
+
+    series = _per_cluster_aperture_series(frames, clusters)
+    smoothed = _smoothed_lip_deltas_per_cluster(series, fps)
+    active_per_frame = _classify_active_per_frame(smoothed)
+
+    min_scene_frames = max(1, int(round(fps * _MIN_SCENE_DURATION_S)))
+    raw_scenes = _build_scenes_from_activity(active_per_frame, min_scene_frames)
+    if not raw_scenes:
+        return None
+
+    cluster_by_id = {c.cluster_id: c for c in clusters}
+    scenes: list[SpeakerScene] = []
+    for start_frame, end_frame, active_ids in raw_scenes:
+        bboxes = tuple(
+            cluster_by_id[cid].bbox
+            for cid in active_ids
+            if cid in cluster_by_id
+        )
+        scenes.append(
+            SpeakerScene(
+                start_s=start_frame / fps,
+                end_s=end_frame / fps,
+                active_bboxes=bboxes,
+            )
+        )
+
+    return SpeakerScenesAnalysis(
+        frame_w=frame_w,
+        frame_h=frame_h,
+        fps=fps,
+        cluster_bboxes=tuple(c.bbox for c in clusters),
+        scenes=tuple(scenes),
+    )
+
 
 def _ensure_face_landmarker_model() -> Path | None:
     if _FACE_LANDMARKER_MODEL_PATH.exists():

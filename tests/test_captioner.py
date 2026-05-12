@@ -243,7 +243,11 @@ class TestAddCaptions:
     @staticmethod
     def _extract_ass_path(cmd: list[str]) -> Path:
         vf_value = cmd[cmd.index("-vf") + 1]
-        return Path(vf_value.removeprefix("ass=filename=").removeprefix("ass="))
+        stripped = vf_value.removeprefix("ass=filename=").removeprefix("ass=")
+        # Strip optional ":fontsdir=..." suffix appended for bundled fonts
+        if ":fontsdir=" in stripped:
+            stripped = stripped.split(":fontsdir=", 1)[0]
+        return Path(stripped)
 
     def _run_add_captions(self, clip_path, transcription, clip, config):
         with patch("youcut.captioner._ffmpeg_supports_ass", return_value=True), \

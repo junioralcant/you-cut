@@ -9,6 +9,10 @@ from youcut.models import TranscriptionResult, ViralClip, WordTimestamp
 
 logger = logging.getLogger(__name__)
 
+ASSETS_FONTS_DIR = Path(__file__).resolve().parent / "assets" / "fonts"
+SERIF_FONT_FILE = ASSETS_FONTS_DIR / "EBGaramond-Regular.ttf"
+SERIF_FONT_NAME = "EB Garamond"
+
 _WORD_STYLE = (
     "Style: Default,Arial,110,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,"
     "-1,0,0,0,100,100,0,0,1,5,1,8,10,10,820,1"
@@ -17,6 +21,38 @@ _PHRASE_STYLE = (
     "Style: Default,Arial,60,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,"
     "-1,0,0,0,100,100,0,0,1,3,1,2,10,10,60,1"
 )
+# MarginV define a distância do texto até a borda inferior do canvas
+# (Alignment=2 = bottom-center). Para canvas 1920: MarginV=864 ≈ Y=55% (solo),
+# MarginV=480 ≈ Y=75% (sobre o speaker no layout speaker_bottom_ai_top).
+_PHRASE_SERIF_MARGIN_V_DEFAULT = 864
+_PHRASE_SERIF_MARGIN_V_SPEAKER_BOTTOM = 480
+
+
+def _phrase_serif_centered_style(margin_v: int) -> str:
+    """Monta a linha Style do preset serif com MarginV adaptativo.
+
+    Alignment=2 (bottom-center, MarginV é distância da borda inferior — comportamento
+    previsível). Shadow=3 + BackColour ~63% preto dá um drop shadow sutil que
+    mantém legibilidade em fundos claros sem virar contorno duro tipo
+    "TikTok karaokê".
+    """
+    return (
+        f"Style: Default,{SERIF_FONT_NAME},96,"
+        "&H00FFFFFF,&H000000FF,&H00000000,&H40000000,"
+        "0,0,0,0,100,100,0,0,1,0,4,2,40,40,"
+        f"{margin_v},1"
+    )
+
+
+# Janela máxima de palavras agrupadas num chunk de legenda serif.
+_PHRASE_SERIF_MAX_WORDS = 4
+# Gap (segundos) entre palavras que força quebra de chunk.
+_PHRASE_SERIF_GAP_BREAK_S = 0.35
+# Duração mínima visível de um chunk (segundos) — chunks muito curtos
+# são estendidos pra evitar piscar.
+_PHRASE_SERIF_MIN_DURATION_S = 0.8
+# Duração máxima visível de um chunk (segundos).
+_PHRASE_SERIF_MAX_DURATION_S = 3.0
 
 _ASS_HEADER = """\
 [Script Info]
@@ -91,6 +127,57 @@ def _generate_word_events(words: list[WordTimestamp], offset: float) -> str:
     return "\n".join(lines)
 
 
+def _chunk_words_for_serif(
+    words: list[WordTimestamp],
+) -> list[list[WordTimestamp]]:
+    """Agrupa palavras em chunks de 1–4 com base em gaps de fala.
+
+    Quebra um chunk quando: (1) atinge `_PHRASE_SERIF_MAX_WORDS`, (2) o gap
+    para a próxima palavra excede `_PHRASE_SERIF_GAP_BREAK_S`, ou (3) o chunk
+    já dura mais que `_PHRASE_SERIF_MAX_DURATION_S`.
+    """
+    chunks: list[list[WordTimestamp]] = []
+    current: list[WordTimestamp] = []
+    for i, w in enumerate(words):
+        current.append(w)
+        chunk_dur = current[-1].end - current[0].start
+        next_gap = (
+            words[i + 1].start - w.end if i + 1 < len(words) else float("inf")
+        )
+        should_break = (
+            len(current) >= _PHRASE_SERIF_MAX_WORDS
+            or next_gap >= _PHRASE_SERIF_GAP_BREAK_S
+            or chunk_dur >= _PHRASE_SERIF_MAX_DURATION_S
+        )
+        if should_break:
+            chunks.append(current)
+            current = []
+    if current:
+        chunks.append(current)
+    return chunks
+
+
+def _generate_phrase_serif_events(
+    words: list[WordTimestamp], offset: float
+) -> str:
+    """Emite Dialogue ASS para o preset serif centralizado."""
+    chunks = _chunk_words_for_serif(words)
+    lines: list[str] = []
+    for chunk in chunks:
+        start_t = chunk[0].start - offset
+        end_t = chunk[-1].end - offset
+        duration = end_t - start_t
+        if duration < _PHRASE_SERIF_MIN_DURATION_S:
+            end_t = start_t + _PHRASE_SERIF_MIN_DURATION_S
+        start = _format_ass_time(start_t)
+        end = _format_ass_time(end_t)
+        text = _escape_ass(" ".join(w.word.strip() for w in chunk).strip())
+        if not text:
+            continue
+        lines.append(f"Dialogue: 0,{start},{end},Default,,0,0,0,,{text}")
+    return "\n".join(lines)
+
+
 def _generate_phrase_events(
     transcription: TranscriptionResult,
     clip_start: float,
@@ -134,12 +221,26 @@ def add_captions(
 ) -> Path:
     """Burn subtitles into clip_path and return the same path."""
     offset = clip.start_time
-    style_line = _WORD_STYLE if config.subtitle_style == "word" else _PHRASE_STYLE
+    style = config.subtitle_style
+    if style == "word":
+        style_line = _WORD_STYLE
+    elif style == "phrase_serif_centered":
+        margin_v = (
+            _PHRASE_SERIF_MARGIN_V_SPEAKER_BOTTOM
+            if config.social_layout_mode == "speaker_bottom_ai_top"
+            else _PHRASE_SERIF_MARGIN_V_DEFAULT
+        )
+        style_line = _phrase_serif_centered_style(margin_v)
+    else:
+        style_line = _PHRASE_STYLE
     header = _ASS_HEADER.format(res_x=1080, res_y=1920, style=style_line)
 
-    if config.subtitle_style == "word":
+    if style == "word":
         words = _filter_words(transcription, clip.start_time, clip.end_time)
         events = _generate_word_events(words, offset)
+    elif style == "phrase_serif_centered":
+        words = _filter_words(transcription, clip.start_time, clip.end_time)
+        events = _generate_phrase_serif_events(words, offset)
     else:
         events = _generate_phrase_events(
             transcription, clip.start_time, clip.end_time, offset
@@ -171,10 +272,13 @@ def add_captions(
 
     try:
         safe_ass_path.write_bytes(ass_file.read_bytes())
+        ass_filter = f"ass={safe_ass_path}"
+        if ASSETS_FONTS_DIR.exists():
+            ass_filter += f":fontsdir={ASSETS_FONTS_DIR}"
         cmd = [
             "ffmpeg",
             "-i", str(clip_path),
-            "-vf", f"ass={safe_ass_path}",
+            "-vf", ass_filter,
             "-c:v", "libx264",
             "-c:a", "aac",
             "-y",

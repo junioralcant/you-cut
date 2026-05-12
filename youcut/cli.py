@@ -311,6 +311,7 @@ def _run_single_source_pipeline(
                         clip_path,
                         clip,
                         config,
+                        transcription=transcription,
                     )
                     clip_paths[index] = final_path
                     captions_applied_flags.append(captions_applied)
@@ -401,7 +402,7 @@ def run(
         "word",
         "--style",
         "-s",
-        help="Estilo das legendas: 'word' (palavra por palavra) ou 'phrase' (frase completa)",
+        help="Estilo das legendas: 'word' (palavra por palavra), 'phrase' (frase completa) ou 'phrase_serif_centered' (chunks 1–4 palavras em serif branca centralizada)",
     ),
     dry_run: bool = typer.Option(
         False, "--dry-run", help="Exibir análise dos trechos sem gerar arquivos de vídeo"
@@ -898,25 +899,40 @@ def _extract_cut_result(cut_result: Path | CaptionBurnResult) -> tuple[Path, boo
 
 
 def _is_editorial_social_layout(config: PipelineConfig) -> bool:
-    return config.cut_mode == "social" and config.social_layout_mode == "speaker_bottom_ai_top"
+    return config.cut_mode == "social" and config.social_layout_mode in (
+        "speaker_bottom_ai_top",
+        "alternating_image",
+    )
 
 
 def _finalize_editorial_social_clip(
     clip_path: Path,
     clip: ViralClip,
     config: PipelineConfig,
+    transcription: TranscriptionResult | None = None,
 ) -> tuple[Path, bool, str | None]:
     composed_path = clip_path
     try:
-        band_h = config.social_layout_title_band_height if config.social_layout_title_enabled else 0
-        bottom_h = 1920 - config.social_layout_top_image_height - band_h
+        if config.social_layout_mode == "alternating_image":
+            # No alternating_image o speaker ocupa 60% (1152px); imagem 40%.
+            bottom_h = 1152
+        else:
+            band_h = config.social_layout_title_band_height if config.social_layout_title_enabled else 0
+            bottom_h = 1920 - config.social_layout_top_image_height - band_h
         if bottom_h <= 0:
             raise ValueError(f"bottom_h inválido: {bottom_h}")
+        # Mantém referência ao clipe SOURCE (pre-framing) — o composer usa
+        # esses pixels nas cenas dual_speakers do alternating_image.
+        source_clip_path = clip_path
         framed_path = frame_for_panel(
             clip_path, target_w=1080, target_h=bottom_h, config=config,
         )
         logger.info("Social composer: generating top image for clip %s", framed_path.name)
-        composed_path = compose_social_clip(framed_path, clip, config)
+        composed_path = compose_social_clip(
+            framed_path, clip, config,
+            transcription=transcription,
+            source_clip_path=source_clip_path,
+        )
     except Exception as exc:
         logger.warning("Social composer falhou; usando clipe base %s: %s", clip_path.name, exc)
 
@@ -1219,7 +1235,7 @@ def run_flow_b(
                         )
                 if _is_editorial_social_layout(social_config):
                     clip_path, captions_applied, caption_warning = _finalize_editorial_social_clip(
-                        clip_path, sc, social_config
+                        clip_path, sc, social_config, transcription=transcription
                     )
                 else:
                     # Social/classic: tratamento visual ANTES da queima de legenda (RF-13/14).
@@ -1377,7 +1393,7 @@ def run_flow_c(
                         )
                 if _is_editorial_social_layout(config):
                     clip_path, captions_applied, caption_warning = _finalize_editorial_social_clip(
-                        clip_path, clip, config
+                        clip_path, clip, config, transcription=transcription
                     )
                 else:
                     # Social/classic: tratamento visual ANTES das legendas (RF-13/14).

@@ -19,7 +19,7 @@ class PipelineConfig(BaseSettings):
     whisper_model: str = "medium"
     claude_model: str = "claude-sonnet-4-6"
     clip_count: int = 5
-    subtitle_style: Literal["word", "phrase"] = "word"
+    subtitle_style: Literal["word", "phrase", "phrase_serif_centered"] = "word"
     output_dir: Path = Path("output")
     dry_run: bool = False
     blur_background: bool = False
@@ -36,7 +36,9 @@ class PipelineConfig(BaseSettings):
     huggingface_token: str | None = None
     face_detection_confidence: float = 0.5
     thumbnail_text: str = ""
-    social_layout_mode: Literal["classic", "speaker_bottom_ai_top"] = "classic"
+    social_layout_mode: Literal[
+        "classic", "speaker_bottom_ai_top", "alternating_image"
+    ] = "classic"
     social_layout_title_enabled: bool = True
     social_layout_image_provider: Literal["openai", "local"] = "openai"
     social_layout_apply_face_tracking: bool = True

@@ -446,6 +446,15 @@ def _select_best_local_candidate(
         timestamp, frame_bytes = frames[0]
         return timestamp, frame_bytes, 0.0
 
+    # Em versões >=0.11 do mediapipe a API legacy (mp.solutions) foi removida.
+    # Sem o detector dá pra rodar sem score-by-face: pega o primeiro frame.
+    if not hasattr(mp, "solutions"):
+        logger.warning(
+            "MediaPipe sem API legacy 'solutions' — pulando scoring de rosto e usando primeiro frame"
+        )
+        timestamp, frame_bytes = frames[0]
+        return timestamp, frame_bytes, 0.0
+
     best_candidate = frames[0]
     best_score = -1.0
     detector = mp.solutions.face_detection.FaceDetection(min_detection_confidence=min_confidence)
