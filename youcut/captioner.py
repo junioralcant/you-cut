@@ -12,6 +12,12 @@ logger = logging.getLogger(__name__)
 ASSETS_FONTS_DIR = Path(__file__).resolve().parent / "assets" / "fonts"
 SERIF_FONT_FILE = ASSETS_FONTS_DIR / "EBGaramond-Regular.ttf"
 SERIF_FONT_NAME = "EB Garamond"
+# Fonte do preset "motivacao". Crimson Text BoldItalic foi escolhida via
+# comparação visual frame-a-frame com o vídeo de referência (tasks/prd-preset-
+# motivacao/analise-video-referencia.md §4). Letras compactas + peso bold +
+# serifas sutis bateram melhor que Lora/Playfair/Merriweather/Source Serif.
+MOTIVACAO_ITALIC_FONT_FILE = ASSETS_FONTS_DIR / "CrimsonText-BoldItalic.ttf"
+MOTIVACAO_ITALIC_FONT_NAME = "Crimson Text"
 
 _WORD_STYLE = (
     "Style: Default,Arial,110,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,"
@@ -26,6 +32,14 @@ _PHRASE_STYLE = (
 # MarginV=480 ≈ Y=75% (sobre o speaker no layout speaker_bottom_ai_top).
 _PHRASE_SERIF_MARGIN_V_DEFAULT = 864
 _PHRASE_SERIF_MARGIN_V_SPEAKER_BOTTOM = 480
+
+# Posições absolutas (PlayRes 1080×1920) usadas pelo preset motivacao.
+# Y=964 = centro vertical alinhado com a legenda do vídeo de referência.
+# Offset=80 dimensiona pra fontsize=130 (Default) + 65 (Handle) — handle fica
+# colado abaixo da legenda principal sem sobreposição.
+_MOTIVACAO_WORD_X = 540
+_MOTIVACAO_WORD_Y = 964
+_MOTIVACAO_HANDLE_Y_OFFSET = 80  # gap centro-a-centro entre palavra e handle
 
 
 def _phrase_serif_centered_style(margin_v: int) -> str:
@@ -68,6 +82,109 @@ Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour,
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
+
+
+def _word_serif_italic_styles() -> str:
+    """Estilos ASS do preset motivacao: legenda (Default) + handle (Handle).
+
+    Fontsize=130 para a legenda; handle fontsize=70 totalmente opaco.
+    Outline preto leve (2px Default, 1px Handle) pra destacar texto sobre
+    fundos variados sem virar "TikTok karaokê". Shadow 3 + BackColour 50%
+    preto preserva o "halo" sutil do referência.
+    """
+    default = (
+        f"Style: Default,{MOTIVACAO_ITALIC_FONT_NAME},130,"
+        "&H00FFFFFA,&H000000FF,&H00000000,&H80000000,"
+        "0,-1,0,0,100,100,0,0,1,2,3,5,40,40,0,1"
+    )
+    handle = (
+        f"Style: Handle,{MOTIVACAO_ITALIC_FONT_NAME},70,"
+        "&H00FFFFFF,&H000000FF,&H00000000,&H80000000,"
+        "0,-1,0,0,100,100,0,0,1,1,3,5,40,40,0,1"
+    )
+    return default + "\n" + handle
+
+
+_MOTIVACAO_MAX_WORDS_PER_CHUNK = 3
+_MOTIVACAO_GAP_BREAK_S = 0.35
+_MOTIVACAO_MAX_DURATION_S = 3.0
+_MOTIVACAO_MIN_DURATION_S = 0.6
+
+
+def _chunk_words_for_motivacao(
+    words: list[WordTimestamp],
+) -> list[list[WordTimestamp]]:
+    """Agrupa palavras em chunks de 1–3 com base em gaps de fala e duração.
+
+    Quebra um chunk quando: (1) atinge ``_MOTIVACAO_MAX_WORDS_PER_CHUNK``,
+    (2) o gap para a próxima palavra excede ``_MOTIVACAO_GAP_BREAK_S``,
+    (3) o chunk já dura mais que ``_MOTIVACAO_MAX_DURATION_S``.
+    """
+    chunks: list[list[WordTimestamp]] = []
+    current: list[WordTimestamp] = []
+    for i, w in enumerate(words):
+        current.append(w)
+        chunk_dur = current[-1].end - current[0].start
+        next_gap = (
+            words[i + 1].start - w.end if i + 1 < len(words) else float("inf")
+        )
+        should_break = (
+            len(current) >= _MOTIVACAO_MAX_WORDS_PER_CHUNK
+            or next_gap >= _MOTIVACAO_GAP_BREAK_S
+            or chunk_dur >= _MOTIVACAO_MAX_DURATION_S
+        )
+        if should_break:
+            chunks.append(current)
+            current = []
+    if current:
+        chunks.append(current)
+    return chunks
+
+
+def _generate_word_serif_italic_events(
+    words: list[WordTimestamp], offset: float, handle: str | None
+) -> str:
+    """Eventos por chunk (1-3 palavras) centralizados + handle opcional.
+
+    Cada chunk produz 1 Dialogue 'Default' posicionado em
+    (_MOTIVACAO_WORD_X, _MOTIVACAO_WORD_Y) via \\pos. Quando ``handle`` é
+    não-vazio, emite também 1 Dialogue 'Handle' sincronizado,
+    ``_MOTIVACAO_HANDLE_Y_OFFSET`` px abaixo.
+    """
+    chunks = _chunk_words_for_motivacao(words)
+    lines: list[str] = []
+    handle_clean = (handle or "").strip().lstrip("@")
+    # Handle persistente: um único Dialogue que dura do início ao fim do
+    # clipe (usamos 9:59:59.99 como sentinela "fim infinito"). Assim o
+    # @handle não pisca junto com as palavras — fica fixo embaixo o tempo todo.
+    if handle_clean:
+        handle_y = _MOTIVACAO_WORD_Y + _MOTIVACAO_HANDLE_Y_OFFSET
+        pos_handle = f"{{\\pos({_MOTIVACAO_WORD_X},{handle_y})}}"
+        handle_text = _escape_ass(f"@{handle_clean}")
+        lines.append(
+            f"Dialogue: 0,0:00:00.00,9:59:59.99,Handle,,0,0,0,,{pos_handle}{handle_text}"
+        )
+    for i, chunk in enumerate(chunks):
+        start_t = chunk[0].start - offset
+        end_t = chunk[-1].end - offset
+        # Estender chunks curtos pra MIN_DURATION sem invadir o próximo
+        # (evita sobreposição visual onde dois chunks renderizam juntos).
+        if end_t - start_t < _MOTIVACAO_MIN_DURATION_S:
+            desired_end = start_t + _MOTIVACAO_MIN_DURATION_S
+            if i + 1 < len(chunks):
+                next_start = chunks[i + 1][0].start - offset
+                desired_end = min(desired_end, next_start)
+            end_t = max(end_t, desired_end)
+        start = _format_ass_time(start_t)
+        end = _format_ass_time(end_t)
+        text = _escape_ass(" ".join(w.word.strip() for w in chunk).strip())
+        if not text:
+            continue
+        pos_word = f"{{\\pos({_MOTIVACAO_WORD_X},{_MOTIVACAO_WORD_Y})}}"
+        lines.append(
+            f"Dialogue: 0,{start},{end},Default,,0,0,0,,{pos_word}{text}"
+        )
+    return "\n".join(lines)
 
 
 @lru_cache(maxsize=1)
@@ -231,6 +348,8 @@ def add_captions(
             else _PHRASE_SERIF_MARGIN_V_DEFAULT
         )
         style_line = _phrase_serif_centered_style(margin_v)
+    elif style == "word_serif_italic":
+        style_line = _word_serif_italic_styles()
     else:
         style_line = _PHRASE_STYLE
     header = _ASS_HEADER.format(res_x=1080, res_y=1920, style=style_line)
@@ -241,6 +360,11 @@ def add_captions(
     elif style == "phrase_serif_centered":
         words = _filter_words(transcription, clip.start_time, clip.end_time)
         events = _generate_phrase_serif_events(words, offset)
+    elif style == "word_serif_italic":
+        words = _filter_words(transcription, clip.start_time, clip.end_time)
+        events = _generate_word_serif_italic_events(
+            words, offset, config.motivacao_handle
+        )
     else:
         events = _generate_phrase_events(
             transcription, clip.start_time, clip.end_time, offset

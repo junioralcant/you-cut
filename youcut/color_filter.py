@@ -21,6 +21,15 @@ _PRESETS: Final[dict[str, str]] = {
     "vintage": "curves=preset=cross_process,eq=saturation=0.85:contrast=1.10:gamma=0.95",
     # punchy: contraste e saturação reforçados, sem viés de cor
     "punchy": "eq=saturation=1.20:contrast=1.12:brightness=0.02",
+    # motivacao_lilac: sombras puxadas pra azul-violeta, curva S, vinheta sutil.
+    # Casa com a luz lilás do set típico dos Reels motivacionais pt-BR
+    # (ver tasks/prd-preset-motivacao/analise-video-referencia.md §7).
+    "motivacao_lilac": (
+        "eq=contrast=1.10:saturation=0.92:brightness=-0.02,"
+        "curves=master='0/0 0.25/0.16 0.75/0.84 1/1',"
+        "colorbalance=rs=-0.05:gs=-0.02:bs=0.06:rh=0.03:bh=-0.02,"
+        "vignette=PI/5:eval=init"
+    ),
 }
 
 VALID_PRESETS: Final[tuple[str, ...]] = tuple(_PRESETS)

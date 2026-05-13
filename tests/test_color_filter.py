@@ -21,4 +21,4 @@ def test_unknown_preset_raises():
 
 
 def test_valid_presets_includes_documented_set():
-    assert set(VALID_PRESETS) == {"none", "warm", "cool", "vintage", "punchy"}
+    assert set(VALID_PRESETS) == {"none", "warm", "cool", "vintage", "punchy", "motivacao_lilac"}

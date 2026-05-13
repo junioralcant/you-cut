@@ -19,7 +19,9 @@ class PipelineConfig(BaseSettings):
     whisper_model: str = "medium"
     claude_model: str = "claude-sonnet-4-6"
     clip_count: int = 5
-    subtitle_style: Literal["word", "phrase", "phrase_serif_centered"] = "word"
+    subtitle_style: Literal[
+        "word", "phrase", "phrase_serif_centered", "word_serif_italic"
+    ] = "word"
     output_dir: Path = Path("output")
     dry_run: bool = False
     blur_background: bool = False
@@ -53,7 +55,18 @@ class PipelineConfig(BaseSettings):
     decoupage_noise_db: float = -30.0
     decoupage_min_silence_gap: float = 0.4
     decoupage_keep_padding: float = 0.05
-    social_filter_preset: Literal["none", "warm", "cool", "vintage", "punchy"] = "none"
+    social_filter_preset: Literal[
+        "none", "warm", "cool", "vintage", "punchy", "motivacao_lilac"
+    ] = "none"
+
+    # ── Preset visual "motivacao" (9:16 social) ────────────────────────────
+    # Estilo modelado a partir de Reels motivacionais pt-BR: legenda Lora
+    # SemiBold Italic palavra-única central + handle colado abaixo + badge
+    # @handle no canto inferior esquerdo + outro fade-to-black 3s.
+    # Ver tasks/prd-preset-motivacao/analise-video-referencia.md.
+    motivacao_handle: str | None = None  # ex: "tribodavisionaria" (sem @)
+    motivacao_overlay: bool = False  # queima badge no canto inferior esquerdo
+    motivacao_outro: bool = False  # anexa 3s fade-to-black com badge central
 
     runway_api_key: str | None = None
     fal_api_key: str | None = None

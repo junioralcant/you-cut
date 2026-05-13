@@ -307,8 +307,50 @@ youcut cuts "https://www.youtube.com/watch?v=exemplo" --skip-review --upload --p
 | `--upload` | Faz upload dos clipes aprovados ao final do pipeline |
 | `--thumbnail-text` | Texto opcional para sobrescrever o texto padrão sugerido pela IA na thumbnail |
 | `--platforms` | Plataformas de upload: `youtube`, `instagram`, `tiktok` ou `all` |
+| `--motivacao` | Aplica o **preset visual "motivacao"** (ver seção abaixo) — força modo social 9:16 |
+| `--handle` | Handle (sem `@`) usado pelo preset motivacao; sobrescreve `MOTIVACAO_HANDLE` do `.env` |
 | `--log-level` | Nível de log: `DEBUG`, `INFO`, `WARNING`, `ERROR` |
 | `--log-file` | Caminho para salvar o arquivo de log |
+
+### Preset visual `motivacao` — `--motivacao`
+
+Replica o look de Reels motivacionais pt-BR: vídeo 9:16 com **grade lilás** nas sombras, legenda **Crimson Text BoldItalic** branca palavra-única (ou em chunks de até 3 palavras) centralizada no quadro com outline preto fino, e um **handle persistente** (`@seucanal`) fixo abaixo da legenda do início ao fim do clipe.
+
+```bash
+# Uso padrão — lê MOTIVACAO_HANDLE do .env
+youcut cuts "https://www.youtube.com/watch?v=exemplo" --motivacao
+
+# Sobrescrever handle por execução
+youcut cuts "https://www.youtube.com/watch?v=exemplo" --motivacao --handle seucanal
+
+# Combinar com revisão automática
+youcut cuts "https://www.youtube.com/watch?v=exemplo" --motivacao --skip-review --upload --platforms instagram,tiktok
+```
+
+**Configurar o handle por padrão** no `.env`:
+
+```bash
+# Handle fixo (sem @) — usado por --motivacao quando nenhum --handle é passado
+MOTIVACAO_HANDLE=seucanal
+```
+
+**O que o preset aplica automaticamente:**
+
+| Componente | Detalhe |
+|---|---|
+| Aspect ratio | 9:16 vertical (scale+crop centro) |
+| Color grade | `motivacao_lilac` — sombras puxadas pra azul-violeta, curva S, vinheta |
+| Legenda | Crimson Text BoldItalic 130px, italic, branco com outline preto 2px, posição centro (`\pos(540,964)`) |
+| Agrupamento | 1–3 palavras por legenda; quebra em pausas de fala >0.35s |
+| Handle | Fonte 70px opaca, persistente do segundo 0 até o fim, colado 80px abaixo da legenda |
+| Modo | Força `social` (9:16) — `--mode youtube` é ignorado quando `--motivacao` está ativo |
+
+**Reativar elementos opcionais** (desligados por default; setar no `.env`):
+
+```bash
+MOTIVACAO_OVERLAY=true   # badge IG + @handle no canto inferior esquerdo
+MOTIVACAO_OUTRO=true     # outro fade-to-black 3s ao fim com badge centralizado
+```
 
 ### Sessões salvas
 

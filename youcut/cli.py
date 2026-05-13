@@ -21,6 +21,7 @@ from youcut.analyzer import YOUTUBE_MIN_DURATION, analyze
 from youcut.caption_burner import CaptionBurner
 from youcut.captioner import add_captions
 from youcut.clipper import cut_clip
+from youcut.motivacao import apply_motivacao_postprocess
 from youcut.face_tracker import apply_face_tracking, frame_for_panel
 from youcut.config import PipelineConfig
 from youcut.downloader import VideoDownloadError, download_video
@@ -322,6 +323,13 @@ def _run_single_source_pipeline(
                     clip_path = apply_visual_style(clip_path, config)
                     clip_paths[index] = clip_path
                     add_captions(clip_path, transcription, clip, config)
+                    if (config.motivacao_overlay or config.motivacao_outro) and config.motivacao_handle:
+                        apply_motivacao_postprocess(
+                            clip_path,
+                            config.motivacao_handle,
+                            with_overlay=config.motivacao_overlay,
+                            with_outro=config.motivacao_outro,
+                        )
                     captions_applied_flags.append(True)
                     caption_warnings.append(None)
             except Exception as e:
@@ -1777,6 +1785,16 @@ def cuts(
     log_file: Optional[Path] = typer.Option(None, "--log-file", help="Arquivo de log"),
     music: bool = typer.Option(False, "--music", help="Adicionar trilha sonora automática (apenas modo social)"),
     mode: Optional[str] = typer.Option(None, "--mode", help="Modo de corte: social ou youtube (pula seleção interativa)"),
+    motivacao: bool = typer.Option(
+        False,
+        "--motivacao",
+        help="Aplica o preset visual 'motivacao' (9:16): legenda Lora SemiBold Italic palavra-única + grade lilás + badge canto + outro fade-to-black 3s. Força modo social.",
+    ),
+    handle: Optional[str] = typer.Option(
+        None,
+        "--handle",
+        help="Handle (sem @) usado pelo preset motivacao. Sobrescreve MOTIVACAO_HANDLE do .env.",
+    ),
     yes: bool = typer.Option(False, "--yes", "-y", help="Confirmar automaticamente todas as perguntas interativas"),
 ) -> None:
     """Gera cortes inteligentes (YouTube 16:9 ou redes sociais 9:16) com revisão e publicação."""
@@ -1858,6 +1876,32 @@ def cuts(
 
     try:
         selected_platforms = _parse_platforms(platforms_raw) if upload else list(_SUPPORTED_PLATFORMS)
+
+        # O preset motivacao só faz sentido no 9:16 e usa o caminho classic
+        # (caption_burner). Resolvemos os overrides antes do resto pra que
+        # a lógica de layout/filtro abaixo já enxergue o estado final.
+        motivacao_active = motivacao
+        motivacao_handle_resolved: Optional[str] = None
+        if motivacao_active:
+            if mode != "social":
+                _console.print(
+                    "[yellow]--motivacao força modo social (9:16). Ignorando --mode anterior.[/yellow]"
+                )
+                mode = "social"
+            # handle: flag tem precedência; senão lê do .env via PipelineConfig
+            env_handle = PipelineConfig().motivacao_handle  # type: ignore[call-arg]
+            motivacao_handle_resolved = (handle or env_handle or "").strip().lstrip("@") or None
+            if not motivacao_handle_resolved:
+                _err_console.print(Panel(
+                    "[red]Preset motivacao requer um handle.[/red] "
+                    "Passe `--handle SEU_HANDLE` ou defina `MOTIVACAO_HANDLE` no `.env`.",
+                    title="[red]Configuração incompleta[/red]",
+                    border_style="red",
+                ))
+                raise typer.Exit(code=2)
+            if color_preset == "none":
+                color_preset = "motivacao_lilac"
+
         # O preset de cor só faz sentido no layout clássico (o editorial é montado
         # depois pelo social_composer). Se o usuário pediu --filter no modo social,
         # desce para o classic e avisa.
@@ -1865,16 +1909,17 @@ def cuts(
         if mode == "social":
             if color_preset != "none":
                 layout_mode = "classic"
-                _console.print(
-                    f"[yellow]--filter={color_preset} aplicado no layout 'classic' "
-                    f"(o layout editorial não suporta filtro de cor nesta versão).[/yellow]"
-                )
+                if not motivacao_active:
+                    _console.print(
+                        f"[yellow]--filter={color_preset} aplicado no layout 'classic' "
+                        f"(o layout editorial não suporta filtro de cor nesta versão).[/yellow]"
+                    )
             else:
                 layout_mode = "speaker_bottom_ai_top"
         else:
             layout_mode = "classic"
 
-        config = PipelineConfig(
+        config_kwargs: dict = dict(
             cut_mode=mode,
             max_clips=resolved_max_clips,
             thumbnail_text=thumbnail_text_value,
@@ -1883,6 +1928,16 @@ def cuts(
             social_filter_preset=color_preset,
             social_visual_style_enabled=not no_visual_style,
         )
+        if motivacao_active:
+            # Por design, o preset motivacao usa só a legenda+handle. Badge
+            # de canto (motivacao_overlay) e outro fade (motivacao_outro)
+            # ficam desligados por padrão — o usuário pode reativá-los
+            # explicitamente via .env (MOTIVACAO_OVERLAY=true / MOTIVACAO_OUTRO=true).
+            config_kwargs.update(
+                subtitle_style="word_serif_italic",
+                motivacao_handle=motivacao_handle_resolved,
+            )
+        config = PipelineConfig(**config_kwargs)
     except Exception as e:
         _err_console.print(Panel(str(e), title="[red]Erro de Configuração[/red]", border_style="red"))
         raise typer.Exit(code=1)

@@ -43,7 +43,9 @@ Subfluxos:
 - **Fluxo B**: gera shorts a partir de cortes existentes, **sem reprocessar** o vídeo original (reusa transcrição cacheada e a sessão salva). Acessível também via `youcut cuts --history`.
 - **Fluxo C**: modo `social` direto da URL, sem sessão prévia.
 
-Flags relevantes: `--max-clips/-n`, `--skip-review`, `--upload`, `--platforms`, `--thumbnail-text`, `--history/-H`.
+Flags relevantes: `--max-clips/-n`, `--skip-review`, `--upload`, `--platforms`, `--thumbnail-text`, `--history/-H`, `--motivacao`, `--handle`.
+
+**Preset visual `--motivacao`** (apenas modo `social`): força layout 9:16 com grade `motivacao_lilac` (sombras lilás), legenda **Crimson Text BoldItalic 130px** italic palavra/chunk-única central com outline preto 2px (`\pos(540,964)`), e **handle persistente** (configurável via `MOTIVACAO_HANDLE` no `.env` ou `--handle`) colado abaixo da legenda do início ao fim do clipe. Palavras agrupadas em chunks de 1–3 via `_chunk_words_for_motivacao`. Badge canto inferior esquerdo e outro fade-to-black desligados por default — reativáveis via `MOTIVACAO_OVERLAY=true` / `MOTIVACAO_OUTRO=true` no `.env`. Implementação em `youcut/captioner.py` (`subtitle_style="word_serif_italic"`), `youcut/color_filter.py` (preset `motivacao_lilac`) e `youcut/motivacao.py` (overlay+outro opcionais).
 
 ### `youcut auth login|revoke|status`
 Gerencia tokens OAuth de YouTube / Instagram / TikTok, salvos em `~/.youcut/credentials/<plataforma>.json`.
