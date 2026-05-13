@@ -1408,10 +1408,25 @@ def run_flow_c(
                     # Em modo youtube, apply_visual_style é no-op via gate interno.
                     clip_path = apply_visual_style(clip_path, config)
                     if config.cut_mode == "social":
-                        burn_result = CaptionBurner().burn(clip_path, style="word")
-                        clip_path = burn_result.output_path
-                        captions_applied = burn_result.captions_applied
-                        caption_warning = burn_result.warning
+                        if config.subtitle_style == "word_serif_italic":
+                            # Preset motivacao: usa captioner.add_captions (Crimson
+                            # Text BoldItalic + handle persistente) em vez do
+                            # CaptionBurner padrão.
+                            add_captions(clip_path, transcription, clip, config)
+                            if (config.motivacao_overlay or config.motivacao_outro) and config.motivacao_handle:
+                                apply_motivacao_postprocess(
+                                    clip_path,
+                                    config.motivacao_handle,
+                                    with_overlay=config.motivacao_overlay,
+                                    with_outro=config.motivacao_outro,
+                                )
+                            captions_applied = True
+                            caption_warning = None
+                        else:
+                            burn_result = CaptionBurner().burn(clip_path, style="word")
+                            clip_path = burn_result.output_path
+                            captions_applied = burn_result.captions_applied
+                            caption_warning = burn_result.warning
 
                 # Etapa de trilha sonora (apenas modo social)
                 track: MusicTrack | None = None
