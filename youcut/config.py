@@ -39,7 +39,10 @@ class PipelineConfig(BaseSettings):
     face_detection_confidence: float = 0.5
     thumbnail_text: str = ""
     social_layout_mode: Literal[
-        "classic", "speaker_bottom_ai_top", "alternating_image"
+        "classic",
+        "speaker_bottom_ai_top",
+        "speaker_top_ai_bottom",
+        "alternating_image",
     ] = "classic"
     social_layout_title_enabled: bool = True
     social_layout_image_provider: Literal["openai", "local"] = "openai"

@@ -99,7 +99,14 @@ class CaptionBurner:
         return srt_path
 
     def _ffmpeg_burn(self, video_path: Path, srt_path: Path, layout_mode: str | None = None) -> Path:
-        from youcut.captioner import _ASS_HEADER, _WORD_STYLE, _PHRASE_STYLE, _format_ass_time, _escape_ass
+        from youcut.captioner import (
+            _ASS_HEADER,
+            _WORD_STYLE,
+            _PHRASE_STYLE,
+            _PHRASE_STYLE_TOP_PANEL,
+            _format_ass_time,
+            _escape_ass,
+        )
 
         out_path = video_path.with_stem(video_path.stem + "_captioned")
 
@@ -118,7 +125,12 @@ class CaptionBurner:
             except Exception:
                 continue
 
-        style = _PHRASE_STYLE if layout_mode == "bottom_panel" else _WORD_STYLE
+        if layout_mode == "bottom_panel":
+            style = _PHRASE_STYLE
+        elif layout_mode == "top_panel":
+            style = _PHRASE_STYLE_TOP_PANEL
+        else:
+            style = _WORD_STYLE
         ass_content = _ASS_HEADER.format(res_x=1080, res_y=1920, style=style) + "\n".join(words) + "\n"
 
         with tempfile.NamedTemporaryFile(suffix=".ass", delete=False, dir=tempfile.gettempdir(), mode="w", encoding="utf-8") as tmp:

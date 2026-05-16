@@ -43,9 +43,11 @@ Subfluxos:
 - **Fluxo B**: gera shorts a partir de cortes existentes, **sem reprocessar** o vídeo original (reusa transcrição cacheada e a sessão salva). Acessível também via `youcut cuts --history`.
 - **Fluxo C**: modo `social` direto da URL, sem sessão prévia.
 
-Flags relevantes: `--max-clips/-n`, `--skip-review`, `--upload`, `--platforms`, `--thumbnail-text`, `--history/-H`, `--motivacao`, `--handle`.
+Flags relevantes: `--max-clips/-n`, `--skip-review`, `--upload`, `--platforms`, `--thumbnail-text`, `--history/-H`, `--motivacao`, `--handle`, `--futebol`.
 
 **Preset visual `--motivacao`** (apenas modo `social`): força layout 9:16 com grade `motivacao_lilac` (sombras lilás), legenda **Crimson Text BoldItalic 130px** italic palavra/chunk-única central com outline preto 2px (`\pos(540,964)`), e **handle persistente** (configurável via `MOTIVACAO_HANDLE` no `.env` ou `--handle`) colado abaixo da legenda do início ao fim do clipe. Palavras agrupadas em chunks de 1–3 via `_chunk_words_for_motivacao`. Badge canto inferior esquerdo e outro fade-to-black desligados por default — reativáveis via `MOTIVACAO_OVERLAY=true` / `MOTIVACAO_OUTRO=true` no `.env`. Implementação em `youcut/captioner.py` (`subtitle_style="word_serif_italic"`), `youcut/color_filter.py` (preset `motivacao_lilac`) e `youcut/motivacao.py` (overlay+outro opcionais).
+
+**Preset `--futebol`** (apenas modo `social`): inverte o layout editorial em relação ao default e divide o canvas 50/50. No layout padrão (`speaker_bottom_ai_top`) a imagem IA fica em cima e o speaker embaixo; com `--futebol`, o speaker vai pra cima (890px), a tarja de título no meio (140px) e a imagem IA embaixo (890px) — split equilibrado entre speaker e imagem. A legenda é reposicionada pro meio do painel do vídeo (centro vertical ≈ y=445; `_PHRASE_STYLE_TOP_PANEL` com `MarginV=1450`) via `CaptionBurner` rodando com `layout_mode="top_panel"`. Mutuamente exclusivo com `--motivacao`. Filtro de cor (`--filter`) é ignorado nesse caminho (mesma limitação do `speaker_bottom_ai_top`). Implementação em `youcut/config.py` (novo valor `speaker_top_ai_bottom` no Literal), `youcut/social_composer.py` (param `inverted=True` no header local + overlay flipado), `youcut/captioner.py` + `youcut/caption_burner.py` (estilo + roteamento por `layout_mode="top_panel"`), `youcut/cli.py` (flag + branch em `_finalize_editorial_social_clip` + override 890/140/890).
 
 ### `youcut auth login|revoke|status`
 Gerencia tokens OAuth de YouTube / Instagram / TikTok, salvos em `~/.youcut/credentials/<plataforma>.json`.

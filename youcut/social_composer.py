@@ -282,6 +282,7 @@ def compose_social_clip(
     label_text, suggested_color_mode = generate_social_label(clip, config)
     style = select_band_style(clip_path.stem)
     logger.info("Social composer: band style preset=%s for clip=%s", style.name, clip_path.stem)
+    inverted = config.social_layout_mode == "speaker_top_ai_bottom"
     top_h = config.social_layout_top_image_height
     band_h = config.social_layout_title_band_height if config.social_layout_title_enabled else 0
     header_h = top_h + band_h
@@ -297,6 +298,7 @@ def compose_social_clip(
         band_height=band_h,
         suggested_color_mode=suggested_color_mode,
         style=style,
+        inverted=inverted,
     )
     output_path = clip_path.with_stem(clip_path.stem + "_social")
 
@@ -314,7 +316,16 @@ def compose_social_clip(
         face_y_norm=face_y_norm,
     )
 
-    overlay_steps = ["[base][header]overlay=0:0[tmp1]", f"[tmp1][bottom]overlay=0:{header_h}[v]"]
+    if inverted:
+        # Layout futebol: speaker em y=0 (alto), painel composto (band+image) em
+        # y=bottom_h. O painel já vem renderizado na ordem invertida (band em
+        # cima, imagem embaixo), então só basta posicioná-lo após o speaker.
+        overlay_steps = [
+            "[base][bottom]overlay=0:0[tmp1]",
+            f"[tmp1][header]overlay=0:{bottom_h}[v]",
+        ]
+    else:
+        overlay_steps = ["[base][header]overlay=0:0[tmp1]", f"[tmp1][bottom]overlay=0:{header_h}[v]"]
 
     filter_parts = [
         f"[0:v]scale={_CANVAS_W}:{header_h}:force_original_aspect_ratio=increase,crop={_CANVAS_W}:{header_h}[header]",
@@ -677,6 +688,7 @@ def _render_social_header_image(
     band_height: int,
     suggested_color_mode: str | None,
     style: BandStyle = _DEFAULT_STYLE,
+    inverted: bool = False,
 ) -> Path:
     top_image_path = generate_social_top_image(clip, output_dir, clip_path, config)
     fallback_path = _render_social_header_image_local(
@@ -689,7 +701,15 @@ def _render_social_header_image(
         band_height=band_height,
         suggested_color_mode=suggested_color_mode,
         style=style,
+        inverted=inverted,
     )
+    if inverted:
+        # O prompt do header AI assume image-em-cima / band-embaixo; no layout
+        # futebol queremos band-em-cima / image-embaixo. Em vez de reescrever o
+        # prompt, mantemos só o fallback local (que faz a composição correta a
+        # partir da imagem que veio do generate_social_top_image).
+        top_image_path.unlink(missing_ok=True)
+        return fallback_path
     ai_path = _render_social_header_image_via_ai(
         top_image_path=top_image_path,
         title=title,
@@ -771,12 +791,20 @@ def _render_social_header_image_local(
     band_height: int,
     suggested_color_mode: str | None,
     style: BandStyle = _DEFAULT_STYLE,
+    inverted: bool = False,
 ) -> Path:
     with Image.open(top_image_path) as top_image:
         top_panel = top_image.convert("RGB").resize((width, top_height), Image.Resampling.LANCZOS)
 
     header_image = Image.new("RGB", (width, height), color=(0, 0, 0))
-    header_image.paste(top_panel, (0, 0))
+    if inverted:
+        # Layout futebol: band em cima, imagem embaixo.
+        image_y = band_height
+        band_y = 0
+    else:
+        image_y = 0
+        band_y = top_height
+    header_image.paste(top_panel, (0, image_y))
     if band_height > 0:
         band_path = _render_title_band_image_local(
             title,
@@ -792,7 +820,7 @@ def _render_social_header_image_local(
             style=style,
         )
         with Image.open(band_path) as band_image:
-            header_image.paste(band_image.convert("RGB"), (0, top_height))
+            header_image.paste(band_image.convert("RGB"), (0, band_y))
         band_path.unlink(missing_ok=True)
 
     with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:

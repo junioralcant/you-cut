@@ -909,6 +909,7 @@ def _extract_cut_result(cut_result: Path | CaptionBurnResult) -> tuple[Path, boo
 def _is_editorial_social_layout(config: PipelineConfig) -> bool:
     return config.cut_mode == "social" and config.social_layout_mode in (
         "speaker_bottom_ai_top",
+        "speaker_top_ai_bottom",
         "alternating_image",
     )
 
@@ -946,7 +947,12 @@ def _finalize_editorial_social_clip(
 
     composed_path = apply_visual_style(composed_path, config)
 
-    result = CaptionBurner().burn(composed_path, style="word", layout_mode="bottom_panel")
+    caption_layout_mode = (
+        "top_panel"
+        if config.social_layout_mode == "speaker_top_ai_bottom"
+        else "bottom_panel"
+    )
+    result = CaptionBurner().burn(composed_path, style="word", layout_mode=caption_layout_mode)
     return result.output_path, result.captions_applied, result.warning
 
 
@@ -1810,6 +1816,11 @@ def cuts(
         "--handle",
         help="Handle (sem @) usado pelo preset motivacao. Sobrescreve MOTIVACAO_HANDLE do .env.",
     ),
+    futebol: bool = typer.Option(
+        False,
+        "--futebol",
+        help="Inverte o layout social editorial: vídeo (speaker) em cima, imagem IA embaixo. Legenda fica posicionada no meio do painel do vídeo. Força modo social.",
+    ),
     yes: bool = typer.Option(False, "--yes", "-y", help="Confirmar automaticamente todas as perguntas interativas"),
 ) -> None:
     """Gera cortes inteligentes (YouTube 16:9 ou redes sociais 9:16) com revisão e publicação."""
@@ -1897,6 +1908,14 @@ def cuts(
         # a lógica de layout/filtro abaixo já enxergue o estado final.
         motivacao_active = motivacao
         motivacao_handle_resolved: Optional[str] = None
+        if motivacao_active and futebol:
+            _err_console.print(Panel(
+                "[red]--motivacao e --futebol são presets exclusivos.[/red] "
+                "Escolha um dos dois.",
+                title="[red]Flags conflitantes[/red]",
+                border_style="red",
+            ))
+            raise typer.Exit(code=2)
         if motivacao_active:
             if mode != "social":
                 _console.print(
@@ -1917,12 +1936,32 @@ def cuts(
             if color_preset == "none":
                 color_preset = "motivacao_lilac"
 
+        # --futebol = espelho do speaker_bottom_ai_top com vídeo em cima e
+        # imagem embaixo. Força modo social. O filtro de cor (--filter) não
+        # vale no caminho editorial; avisamos e seguimos com a inversão.
+        if futebol:
+            if mode != "social":
+                _console.print(
+                    "[yellow]--futebol força modo social (9:16). Ignorando --mode anterior.[/yellow]"
+                )
+                mode = "social"
+            if color_preset != "none":
+                _console.print(
+                    f"[yellow]--filter={color_preset} é ignorado em --futebol "
+                    f"(o layout editorial não aplica filtros de cor).[/yellow]"
+                )
+                color_preset = "none"
+
         # O preset de cor só faz sentido no layout clássico (o editorial é montado
         # depois pelo social_composer). Se o usuário pediu --filter no modo social,
         # desce para o classic e avisa.
-        layout_mode: Literal["classic", "speaker_bottom_ai_top"]
+        layout_mode: Literal[
+            "classic", "speaker_bottom_ai_top", "speaker_top_ai_bottom"
+        ]
         if mode == "social":
-            if color_preset != "none":
+            if futebol:
+                layout_mode = "speaker_top_ai_bottom"
+            elif color_preset != "none":
                 layout_mode = "classic"
                 if not motivacao_active:
                     _console.print(
@@ -1951,6 +1990,12 @@ def cuts(
             config_kwargs.update(
                 subtitle_style="word_serif_italic",
                 motivacao_handle=motivacao_handle_resolved,
+            )
+        if futebol:
+            # Split 50/50: speaker 890 + band 140 + image 890 = 1920.
+            config_kwargs.update(
+                social_layout_top_image_height=890,
+                social_layout_title_band_height=140,
             )
         config = PipelineConfig(**config_kwargs)
     except Exception as e:

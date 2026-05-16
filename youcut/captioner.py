@@ -27,6 +27,15 @@ _PHRASE_STYLE = (
     "Style: Default,Arial,60,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,"
     "-1,0,0,0,100,100,0,0,1,3,1,2,10,10,60,1"
 )
+# Layout futebol (speaker_top_ai_bottom): split 50/50 → speaker ocupa y=0..890.
+# Queremos a legenda visualmente no meio do painel do vídeo (centro ≈ y=445).
+# Alignment=2 = bottom-center; MarginV mede distância a partir do rodapé do
+# canvas. Com fontsize=60, MarginV=1450 coloca o bottom do texto em y=470 →
+# centro do bloco de texto perto de y=440 (centro vertical do painel speaker).
+_PHRASE_STYLE_TOP_PANEL = (
+    "Style: Default,Arial,60,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,"
+    "-1,0,0,0,100,100,0,0,1,3,1,2,10,10,1450,1"
+)
 # MarginV define a distância do texto até a borda inferior do canvas
 # (Alignment=2 = bottom-center). Para canvas 1920: MarginV=864 ≈ Y=55% (solo),
 # MarginV=480 ≈ Y=75% (sobre o speaker no layout speaker_bottom_ai_top).

@@ -49,7 +49,10 @@ def cut_clip(
 
     if clip.cut_mode == "youtube":
         cmd = _build_youtube_cmd(video_path, clip, output_path)
-    elif clip.cut_mode == "social" and config.social_layout_mode == "speaker_bottom_ai_top":
+    elif clip.cut_mode == "social" and config.social_layout_mode in (
+        "speaker_bottom_ai_top",
+        "speaker_top_ai_bottom",
+    ):
         cmd = _build_social_raw_cmd(video_path, clip, config, output_path)
     else:
         cmd = _build_social_cmd(video_path, clip, config, output_path)
@@ -83,9 +86,10 @@ def _build_social_raw_cmd(
 ) -> list[str]:
     """Time-trim the source preserving original aspect ratio.
 
-    The editorial layout (speaker_bottom_ai_top) defers framing to a
-    post-cut face-aware step; pre-cropping here would discard the horizontal
-    context needed to centre on a single speaker or zoom out for two.
+    Os layouts editoriais (speaker_bottom_ai_top e speaker_top_ai_bottom)
+    adiam o framing pra uma etapa pós-corte que é face-aware; pré-recortar
+    aqui descartaria o contexto horizontal necessário pra centralizar num
+    falante único ou afastar pra dois.
 
     Quando ``social_filter_preset`` está ativo, aplicamos o color grade
     aqui para que o composer (que monta o canvas final) já receba o speaker
