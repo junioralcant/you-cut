@@ -1,4 +1,5 @@
 import logging
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -142,11 +143,29 @@ def _build_social_cmd(
     color_chain = get_filter_chain(config.social_filter_preset)
     color_suffix = f",{color_chain}" if color_chain else ""
 
+    # Face-zoom opcional via env MOTIVACAO_FACE_ZOOM (ex.: 1.6).
+    # Aplicado depois do crop 9:16 e antes da queima de legendas em ASS
+    # com coordenadas absolutas 1080×1920, então a legenda permanece em
+    # tamanho original.
+    try:
+        face_zoom = float(os.environ.get("MOTIVACAO_FACE_ZOOM", "1.0"))
+    except ValueError:
+        face_zoom = 1.0
+    zoom_suffix = ""
+    if face_zoom > 1.001:
+        crop_w = int(1080 / face_zoom)
+        crop_h = int(1920 / face_zoom)
+        # Crop centered horizontally; bias upward to keep face framed.
+        crop_x = (1080 - crop_w) // 2
+        crop_y = max(0, (1920 - crop_h) // 3)
+        zoom_suffix = f",crop={crop_w}:{crop_h}:{crop_x}:{crop_y},scale=1080:1920"
+        logger.info("Face zoom %.2fx aplicado (crop %dx%d @ %d,%d).", face_zoom, crop_w, crop_h, crop_x, crop_y)
+
     if use_blur:
         filter_complex = (
             _BLUR_BG_FILTER.replace(
                 "[bg][fg]overlay=(W-w)/2:(H-h)/2[v]",
-                f"[bg][fg]overlay=(W-w)/2:(H-h)/2{color_suffix}[v]",
+                f"[bg][fg]overlay=(W-w)/2:(H-h)/2{color_suffix}{zoom_suffix}[v]",
             )
         )
         return [
@@ -167,7 +186,7 @@ def _build_social_cmd(
         "-ss", str(start),
         "-i", str(video_path),
         "-t", str(duration),
-        "-vf", build_vertical_fill_filter() + color_suffix,
+        "-vf", build_vertical_fill_filter() + color_suffix + zoom_suffix,
         "-c:v", "libx264",
         "-c:a", "aac",
         "-y",
