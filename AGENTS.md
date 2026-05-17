@@ -75,6 +75,36 @@ Configs específicas do `remotion` (em `PipelineConfig`): `comic_remotion_fps` (
 
 Variáveis adicionais: `RUNWAY_API_KEY` (obrigatória pro engine `panels`), `REPLICATE_API_TOKEN` (obrigatória pros engines `prunaai` e `scenes`), `OPENAI_API_KEY` (obrigatória para todos os engines do `comic`). O engine `remotion` requer **Node.js ≥ 20** instalado no PATH (não há chave de API adicional).
 
+### `youcut reddit-story <url>`
+Pipeline **long-form Reddit narrado** (16:9 1920×1080, ~22-25 min). Aceita URL de qualquer thread text-post do Reddit (r/MaliciousCompliance, r/ProRevenge, r/AmItheAsshole, r/EntitledParents, etc.) e gera um MP4 pronto pra publicar no YouTube long-form, com thumbnail 1280×720 e metadata.json (title + description + chapters + tags) compliant com Community Guidelines.
+
+**Stack 100% Replicate + Claude** (decisão de produto canônica — ver memórias `[[stack-poc-hollowire]]` e `[[feedback-custo-imagens]]`):
+1. **Fetch** (`reddit_fetcher.py`) — httpx no endpoint `.json` público do Reddit com User-Agent descritivo (`reddit_story_user_agent`). Reddit bloqueia UAs genéricos.
+2. **Format script** (`script_formatter.py`) — Claude transforma o raw markdown em script narrável: hook 25s + corpo + outro 15s. Target: 4800-5200 palavras (~22-25 min @ speed 1.05).
+3. **TTS** (`providers.kokoro_tts`) — Replicate Kokoro 82M (version pinned `f55956...`), voz `am_adam` (deep authoritative male, analog do ElevenLabs Adam que domina o nicho), speed 1.05. Auto-splits text longo internamente.
+4. **Word timestamps** (`transcriber.py`) — `faster-whisper small.en` int8 local, sem cache (cada sessão tem narração fresca).
+5. **Scene plan** (`scene_planner.py`) — Claude divide o script em N visual beats (default 8) cobrindo arc hook→setup→inciting→rising×N-4→turning→payoff→aftermath. Cada beat retorna prompt cinematográfico (golden hour, Better Call Saul vibe, vibrant palette).
+6. **Images** (`providers.flux_schnell_image`) — Replicate Flux Schnell 16:9, 1 megapixel, 4 inference steps. ~3s/imagem, ~$0.003 cada.
+7. **Compose** (`compositor.py`) — Ken Burns animado por cena (pan sinusoidal + zoom alternando direção por idx), concat demuxer, ASS word-by-word bottom-third Arial 72px com stroke 4px+shadow.
+8. **Metadata pack** (`metadata.py`) — Claude monta numa única chamada estruturada: `main_title` (≤70 chars), 3 `alt_titles` (hooks diferentes), `logline` (2-3 sentenças pra description), e **4 `thumb_variants`** com `name`/`scene_brief`/`headline_line1`/`headline_line2`/`accent_banner`. Cada thumb_variant explora um ângulo visual diferente do mesmo story.
+9. **Thumbnails (4 variantes)** (`thumbnail.py`) — `generate_thumbnail_set` itera pelos 4 thumb_variants gerando 1 thumb cada via Flux Schnell base + Pillow overlay (Anton 130px branco/amarelo + banner vermelho top-right + tag r/sub bottom-left). Output em `thumbnails/thumb_<a|b|c|d>_<name>.png`.
+
+Output em `output/reddit_story/<timestamp>/`: `source.json` · `script.txt` · `narration.wav` · `transcript.json` · `scenes.json` · `images/scene_NN.png` · `scene_clips/scene_NN.mp4` · `captions.ass` · `final.mp4` · `thumbnails/thumb_<a|b|c|d>_<name>.png` (+ `_base.png` cada) · `metadata.json` (com `main_title`, `alt_titles`, `logline`, `description`, `tags`, `chapters`, `thumb_variants`) · `metadata.txt` · `session.json`.
+
+Estado persistido em `~/.youcut/published_videos.json` (dedup global por `reddit_thread_id`).
+
+Subcomandos (Typer subapp): `generate <url>`, `list`, `mark-uploaded <session_id>`.
+
+Flags do `generate`: `--output-dir/-o`, `--skip-thumbnail`, `--skip-metadata`, `--force` (re-processa thread já registrada), `--channel <name>` (default `ThreadCourt`), `--log-level`.
+
+**Dedup automático:** o pipeline persiste cada vídeo gerado em `~/.youcut/published_videos.json` (módulo `published_log.py`). Antes de processar uma URL, checa `reddit_thread_id` na lista — se já existe, aborta antes de qualquer chamada paga (custo zero). `--force` ignora o check. Use `youcut reddit-story list` pra ver tudo, e `youcut reddit-story mark-uploaded <session> --url <youtube_url>` quando publicar no YouTube.
+
+Configs em `PipelineConfig`: `reddit_story_voice` (default `am_adam`), `reddit_story_speed` (1.05), `reddit_story_target_words` (5000), `reddit_story_scene_count` (8), `reddit_story_resolution_w` (1920), `reddit_story_resolution_h` (1080), `reddit_story_whisper_model` (`small.en`), `reddit_story_user_agent`.
+
+Custo típico: **~$0.63/vídeo** de 24 min (TTS Kokoro ~$0.40 + 8 imagens Flux $0.024 + **4 thumbs Flux $0.012** + Claude script/scenes/**metadata pack** ~$0.17). Wall time ~14 min (Claude format + Kokoro narração + Whisper são os bottlenecks).
+
+Variável obrigatória: `REPLICATE_API_TOKEN` (Kokoro + Flux Schnell). `ANTHROPIC_API_KEY` já é validado no boot pelo `PipelineConfig`.
+
 ---
 
 ## 3. Pipeline (Como Funciona)
@@ -211,6 +241,21 @@ youcut/
           Character.tsx   lip-sync via mouth sheet cell + blink + breathe
           Shake.tsx       translate sinusoidal por janelas de impacto
 
+  reddit_story/           pipeline long-form Reddit narrado (`youcut reddit-story`)
+    __init__.py           re-export run_reddit_story_pipeline + erro
+    cli.py                subcomando Typer com flags + render rich
+    pipeline.py           orquestrador 10 etapas (fetch → format → tts → ...)
+    models.py             RedditStorySource + ScenePlan + RedditStorySession
+    reddit_fetcher.py     httpx no .json do Reddit + UA descritivo
+    script_formatter.py   Claude → script narrável 4800-5200 palavras
+    scene_planner.py      Claude → N visual beats com prompts cinematográficos
+    providers.py          wrappers Replicate (Kokoro 82M pinned + Flux Schnell)
+    transcriber.py        faster-whisper small.en sem cache MD5
+    compositor.py         Ken Burns 16:9 + ASS word-by-word bottom-third + mux
+    thumbnail.py          generate_thumbnail_set: 4 thumbs via Flux + Pillow (Anton 130px + banner vermelho)
+    metadata.py           Claude metadata pack: main_title + 3 alt_titles + logline + 4 thumb_briefs + chapters + tags
+    published_log.py      PublishedLog + PublishedEntry — dedup persistido em ~/.youcut/published_videos.json
+
   uploader/
     __init__.py           orquestra upload_clips() multi-plataforma
     base.py               Uploader (ABC) + ClipMetadata + UploadResult
@@ -288,6 +333,14 @@ Cada plataforma implementa a interface `Uploader` (`base.py`):
 | `comic_remotion_idle_blink_period_sec`  | `4.5`               | periodicidade do idle blink do personagem |
 | `comic_remotion_pyphen_locale_fallback` | `pt_BR`             | locale `pyphen` quando o idioma da transcrição é desconhecido |
 | `youtube_music_playlist_url`       | URL fixa default         | playlist YouTube da qual `youcut music sync` baixa as trilhas (sobrescrevível por `.env`) |
+| `reddit_story_voice`               | `am_adam`                | voz Kokoro 82M (deep authoritative male, analog do ElevenLabs Adam) |
+| `reddit_story_speed`               | `1.05`                   | speed multiplier do TTS (snappier que default 1.0) |
+| `reddit_story_target_words`        | `5000`                   | target de palavras do script formatado (~22-25 min narrados) |
+| `reddit_story_scene_count`         | `8`                      | visual beats que o Claude planeja |
+| `reddit_story_resolution_w`        | `1920`                   | largura do vídeo final |
+| `reddit_story_resolution_h`        | `1080`                   | altura do vídeo final |
+| `reddit_story_whisper_model`       | `small.en`               | modelo Whisper p/ word timestamps |
+| `reddit_story_user_agent`          | `youcut-reddit-story/0.1`| Reddit bloqueia UAs genéricos; manter descritivo |
 
 ### Variáveis de ambiente extras (não em `PipelineConfig`)
 - `YOUTUBE_CLIENT_SECRETS_FILE` — caminho do `client_secrets.json`

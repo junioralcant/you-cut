@@ -57,9 +57,11 @@ app.add_typer(app_auth, name="auth")
 
 from youcut.comic.cli import comic_command  # noqa: E402
 from youcut.music.cli import app_music  # noqa: E402
+from youcut.reddit_story.cli import reddit_story_app  # noqa: E402
 
 app.command(name="comic", help="Gera motion comics 9:16 a partir de vídeos curtos (≤120s).")(comic_command)
 app.add_typer(app_music, name="music")
+app.add_typer(reddit_story_app, name="reddit-story")
 
 
 @app.callback()

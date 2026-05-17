@@ -123,6 +123,22 @@ class PipelineConfig(BaseSettings):
         "https://www.youtube.com/playlist?list=PLrAXtmRdnEQzAHKFQJX4D7QAR0o0eEdQy"
     )
 
+    # ── Pipeline reddit-story (long-form Reddit narrado, 16:9) ────────────────
+    # Stack 100% Replicate (Kokoro TTS + Flux Schnell images). Defaults
+    # otimizados pra r/MaliciousCompliance / r/ProRevenge baseado em research
+    # dos canais virais 2026 — am_adam é o analog do "ElevenLabs Adam" que
+    # domina o nicho. Ver memória [[stack-poc-hollowire]] e [[feedback-custo-imagens]].
+    reddit_story_voice: str = "am_adam"  # Kokoro 82M voice (authoritative male)
+    reddit_story_speed: float = 1.05  # snappier que o default 1.0
+    reddit_story_target_words: int = 5000  # ~22-25 min narrados
+    reddit_story_scene_count: int = 8  # visual beats Claude planeja
+    reddit_story_resolution_w: int = 1920
+    reddit_story_resolution_h: int = 1080
+    reddit_story_whisper_model: str = "small.en"  # rápido e suficiente p/ narração
+    reddit_story_user_agent: str = (
+        "youcut-reddit-story/0.1 (https://github.com/youcut)"
+    )  # Reddit bloqueia UAs genéricos
+
     @model_validator(mode="after")
     def validate_api_key_present(self) -> "PipelineConfig":
         if not self.anthropic_api_key or not self.anthropic_api_key.strip():

@@ -20,3 +20,10 @@ cookies.txt
 
 # Remotion vendored project
 youcut/comic/remotion_project/node_modules/
+
+# POC pipelines: track .py scripts, ignore generated run artifacts
+poc/hfy/
+poc/cosmic/
+poc/revenge/
+poc/branding/
+poc/__pycache__/
