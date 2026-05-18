@@ -114,7 +114,7 @@ def compose_long_form(
     a duração da narração (-shortest)."""
     concat_list = work_dir / "concat.txt"
     concat_list.write_text(
-        "\n".join(f"file '{p.as_posix()}'" for p in scene_clips) + "\n"
+        "\n".join(f"file '{p.resolve().as_posix()}'" for p in scene_clips) + "\n"
     )
     silent_video = work_dir / "video_silent.mp4"
     _run(
