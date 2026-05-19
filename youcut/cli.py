@@ -32,6 +32,13 @@ from youcut.music.mixer import MusicMixer
 from youcut.music.provider import YouTubeMusicProvider
 from youcut.preview import generate_clip_preview
 from youcut.reviewer import review_clips
+from youcut.players import (
+    detect_players,
+    disambiguate_mentions,
+    load_catalog,
+    slice_transcript_for_clip,
+)
+from youcut.presenters import detect_presenters, load_catalog as load_presenter_catalog
 from youcut.selector import prompt_clip_selection
 from youcut.session_store import list_sessions, save_session
 from youcut.social_composer import compose_social_clip
@@ -310,11 +317,15 @@ def _run_single_source_pipeline(
         for index, (clip_path, clip) in enumerate(zip(clip_paths, viral_clips)):
             try:
                 if _is_editorial_social_layout(config):
+                    player_images = _resolve_player_images(clip, transcription, config)
+                    presenter_images = _resolve_presenter_images(video_path, config)
                     final_path, captions_applied, caption_warning = _finalize_editorial_social_clip(
                         clip_path,
                         clip,
                         config,
                         transcription=transcription,
+                        player_images=player_images,
+                        presenter_images=presenter_images,
                     )
                     clip_paths[index] = final_path
                     captions_applied_flags.append(captions_applied)
@@ -912,8 +923,190 @@ def _is_editorial_social_layout(config: PipelineConfig) -> bool:
     return config.cut_mode == "social" and config.social_layout_mode in (
         "speaker_bottom_ai_top",
         "speaker_top_ai_bottom",
+        "youtube_top_ai_bottom",
         "alternating_image",
     )
+
+
+# Cache do catálogo por (path, mtime) — recarrega quando a pasta muda.
+_PLAYER_CATALOG_CACHE: dict[tuple[str, float], object] = {}
+
+
+def _get_player_catalog(config: PipelineConfig):
+    """Carrega (com cache) o catálogo de jogadores configurado.
+
+    Retorna ``None`` se o diretório não existe ou está vazio — feature
+    fica transparente quando o usuário não populou ``players_dir``.
+    """
+    players_dir = config.players_dir
+    if not players_dir.exists() or not players_dir.is_dir():
+        return None
+    try:
+        mtime = players_dir.stat().st_mtime
+    except OSError:
+        mtime = 0.0
+    cache_key = (str(players_dir), mtime)
+    cached = _PLAYER_CATALOG_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+    catalog = load_catalog(players_dir)
+    if not catalog.profiles:
+        return None
+    _PLAYER_CATALOG_CACHE[cache_key] = catalog
+    return catalog
+
+
+def _resolve_player_images(
+    clip: ViralClip,
+    transcription: TranscriptionResult | None,
+    config: PipelineConfig,
+) -> list[bytes]:
+    """Detecta jogadores mencionados no clipe e retorna as imagens em bytes.
+
+    Pipeline interno: load_catalog → slice transcript pelo intervalo do
+    clipe → detect_players → disambiguate (Claude opcional) → leitura
+    das imagens. Lista vazia quando não há catálogo, não há transcrição
+    ou nenhum match. Cap de 3 imagens pra evitar diluir o sinal no
+    seedream-4 multi-ref.
+    """
+    if transcription is None:
+        return []
+    catalog = _get_player_catalog(config)
+    if catalog is None:
+        return []
+    words = slice_transcript_for_clip(transcription, clip.start_time, clip.end_time)
+    if not words:
+        return []
+    raw_mentions = detect_players(words, catalog)
+    if not raw_mentions:
+        return []
+
+    anthropic_client = None
+    if config.anthropic_api_key:
+        try:
+            from anthropic import Anthropic
+            anthropic_client = Anthropic(api_key=config.anthropic_api_key)
+        except Exception as exc:
+            logger.warning("Anthropic client indisponível pra desambiguação: %s", exc)
+
+    resolved = disambiguate_mentions(
+        raw_mentions, words, anthropic_client, config.claude_model
+    )
+    if not resolved:
+        return []
+
+    images: list[bytes] = []
+    for mention in resolved[:3]:
+        try:
+            images.append(mention.profile.image_path.read_bytes())
+            logger.info(
+                "Auto-ref jogador: clipe %r → %s (alias=%r)",
+                clip.title,
+                mention.profile.slug,
+                mention.alias_hit,
+            )
+        except OSError as exc:
+            logger.warning(
+                "Falha ao ler imagem do jogador %s: %s — pulando",
+                mention.profile.slug, exc,
+            )
+    return images
+
+
+# Cache do catálogo de apresentadores por (path, mtime). Mesmo padrão do
+# _PLAYER_CATALOG_CACHE.
+_PRESENTER_CATALOG_CACHE: dict[tuple[str, float], object] = {}
+
+# Cache da detecção por vídeo source: chave é Path absoluto. Evita pagar
+# duas chamadas Claude vision em pipelines que processam o mesmo vídeo
+# várias vezes na mesma sessão.
+_PRESENTER_DETECTION_CACHE: dict[Path, list[bytes]] = {}
+
+
+def _get_presenter_catalog(config: PipelineConfig):
+    """Carrega (com cache) o catálogo de apresentadores."""
+    presenters_dir = config.presenters_dir
+    if not presenters_dir.exists() or not presenters_dir.is_dir():
+        return None
+    try:
+        mtime = presenters_dir.stat().st_mtime
+    except OSError:
+        mtime = 0.0
+    cache_key = (str(presenters_dir), mtime)
+    cached = _PRESENTER_CATALOG_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+    catalog = load_presenter_catalog(presenters_dir)
+    if len(catalog) == 0:
+        return None
+    _PRESENTER_CATALOG_CACHE[cache_key] = catalog
+    return catalog
+
+
+def _resolve_presenter_images(
+    video_path: Path,
+    config: PipelineConfig,
+    manual_slugs: list[str] | None = None,
+) -> list[bytes]:
+    """Identifica apresentadores no vídeo e retorna as imagens em bytes.
+
+    Resolução em ordem de prioridade:
+
+    1. ``manual_slugs`` (param explícito ou ``config.presenter_slugs``
+       da flag ``--presenter``): override manual, sem chamada Claude.
+    2. Cache de detecção pra ``video_path``: já detectado nesta sessão.
+    3. Claude vision em amostras esparsas do vídeo. Falha gracioso
+       (sem cliente, sem créditos, erro de API) → lista vazia.
+
+    Cap de 1 apresentador (pra deixar slot no nano-banana 3-image cap
+    pros jogadores).
+    """
+    if manual_slugs is None:
+        manual_slugs = config.presenter_slugs
+    catalog = _get_presenter_catalog(config)
+    if catalog is None:
+        return []
+
+    selected_profiles: list = []
+
+    if manual_slugs:
+        for slug in manual_slugs:
+            profile = catalog.get(slug.strip().lower())
+            if profile is None:
+                logger.warning("Apresentador --presenter %r não encontrado no catálogo", slug)
+                continue
+            selected_profiles.append(profile)
+            logger.info("Auto-ref apresentador (manual): %s", profile.slug)
+    elif video_path in _PRESENTER_DETECTION_CACHE:
+        return _PRESENTER_DETECTION_CACHE[video_path]
+    else:
+        anthropic_client = None
+        if config.anthropic_api_key:
+            try:
+                from anthropic import Anthropic
+                anthropic_client = Anthropic(api_key=config.anthropic_api_key)
+            except Exception as exc:
+                logger.warning("Anthropic client indisponível pra detecção de apresentador: %s", exc)
+        detection = detect_presenters(
+            video_path, catalog, anthropic_client, config.claude_model,
+        )
+        for profile in detection.profiles:
+            selected_profiles.append(profile)
+            logger.info("Auto-ref apresentador (vision): %s", profile.slug)
+
+    # Cap em 1 — abre espaço pros jogadores no slot de 3 do nano-banana.
+    images: list[bytes] = []
+    for profile in selected_profiles[:1]:
+        try:
+            images.append(profile.image_path.read_bytes())
+        except OSError as exc:
+            logger.warning(
+                "Falha ao ler imagem do apresentador %s: %s — pulando",
+                profile.slug, exc,
+            )
+    if not manual_slugs:
+        _PRESENTER_DETECTION_CACHE[video_path] = images
+    return images
 
 
 def _finalize_editorial_social_clip(
@@ -921,8 +1114,11 @@ def _finalize_editorial_social_clip(
     clip: ViralClip,
     config: PipelineConfig,
     transcription: TranscriptionResult | None = None,
+    player_images: list[bytes] | None = None,
+    presenter_images: list[bytes] | None = None,
 ) -> tuple[Path, bool, str | None]:
     composed_path = clip_path
+    is_youtube_top = config.social_layout_mode == "youtube_top_ai_bottom"
     try:
         if config.social_layout_mode == "alternating_image":
             # No alternating_image o speaker ocupa 60% (1152px); imagem 40%.
@@ -935,25 +1131,34 @@ def _finalize_editorial_social_clip(
         # Mantém referência ao clipe SOURCE (pre-framing) — o composer usa
         # esses pixels nas cenas dual_speakers do alternating_image.
         source_clip_path = clip_path
-        framed_path = frame_for_panel(
-            clip_path, target_w=1080, target_h=bottom_h, config=config,
-        )
+        if is_youtube_top:
+            # Layout YouTube-top: vídeo top respeita aspect 16:9 nativo via
+            # letterbox no composer. Pular o face-aware reframe — qualquer
+            # crop aqui distorceria o framing original do criador.
+            framed_path = clip_path
+        else:
+            framed_path = frame_for_panel(
+                clip_path, target_w=1080, target_h=bottom_h, config=config,
+            )
         logger.info("Social composer: generating top image for clip %s", framed_path.name)
         composed_path = compose_social_clip(
             framed_path, clip, config,
             transcription=transcription,
             source_clip_path=source_clip_path,
+            player_images=player_images,
+            presenter_images=presenter_images,
         )
     except Exception as exc:
         logger.warning("Social composer falhou; usando clipe base %s: %s", clip_path.name, exc)
 
     composed_path = apply_visual_style(composed_path, config)
 
-    caption_layout_mode = (
-        "top_panel"
-        if config.social_layout_mode == "speaker_top_ai_bottom"
-        else "bottom_panel"
-    )
+    if config.social_layout_mode == "youtube_top_ai_bottom":
+        caption_layout_mode = "center"
+    elif config.social_layout_mode == "speaker_top_ai_bottom":
+        caption_layout_mode = "top_panel"
+    else:
+        caption_layout_mode = "bottom_panel"
     result = CaptionBurner().burn(composed_path, style="word", layout_mode=caption_layout_mode)
     return result.output_path, result.captions_applied, result.warning
 
@@ -1064,13 +1269,33 @@ def run_flow_a(
                 if config.thumbnail_text.strip():
                     clip.thumbnail_text = config.thumbnail_text
                 clip_path_for_thumb = clip_paths[i] if i < len(clip_paths) else None
-                thumb = generate_thumbnail(clip, output_dir, i, clip_path=clip_path_for_thumb, config=config)
+                player_images = _resolve_player_images(clip, transcription, config)
+                presenter_images = _resolve_presenter_images(video_path, config)
+                thumb = generate_thumbnail(
+                    clip, output_dir, i,
+                    clip_path=clip_path_for_thumb,
+                    config=config,
+                    player_images=player_images,
+                    presenter_images=presenter_images,
+                )
                 thumbnail_paths.append(thumb)
             except Exception as e:
                 logger.warning("Falha ao gerar thumbnail %d: %s", i + 1, e)
                 thumbnail_paths.append(None)
             progress.advance(task_th)
         progress.update(task_th, description="[green]Thumbnails geradas[/green]")
+
+        # Exporta metadados editoriais (clip_NN.txt) — paridade com run() e
+        # run_flow_c. Sem isso a sessão só persiste em ~/.youcut/sessions/<id>.json
+        # e o usuário não vê título/descrição/hashtags ao lado dos MP4s.
+        task_exp = progress.add_task("Exportando metadados...", total=len(viral_clips))
+        for i, clip in enumerate(viral_clips):
+            try:
+                export_metadata(clip, i, output_dir)
+            except Exception as exc:
+                logger.warning("Falha ao exportar metadados do clipe %d: %s", i + 1, exc)
+            progress.advance(task_exp)
+        progress.update(task_exp, description="[green]Metadados exportados[/green]")
 
     clip_records: list[ClipRecord] = []
     for i, (clip, clip_path) in enumerate(zip(viral_clips, clip_paths)):
@@ -1250,8 +1475,16 @@ def run_flow_b(
                             "Face tracking falhou com erro: %s — exportando clipe original.", ft_exc
                         )
                 if _is_editorial_social_layout(social_config):
+                    player_images = _resolve_player_images(sc, transcription, social_config)
+                    # Flow B: source é o clip já cortado (clip_record.clip_path);
+                    # o apresentador aparece nele de qualquer forma, então a
+                    # detecção via vision funciona normalmente.
+                    presenter_images = _resolve_presenter_images(src, social_config)
                     clip_path, captions_applied, caption_warning = _finalize_editorial_social_clip(
-                        clip_path, sc, social_config, transcription=transcription
+                        clip_path, sc, social_config,
+                        transcription=transcription,
+                        player_images=player_images,
+                        presenter_images=presenter_images,
                     )
                 else:
                     # Social/classic: tratamento visual ANTES da queima de legenda (RF-13/14).
@@ -1408,8 +1641,13 @@ def run_flow_c(
                             "Face tracking falhou com erro: %s — exportando clipe original.", ft_exc
                         )
                 if _is_editorial_social_layout(config):
+                    player_images = _resolve_player_images(clip, transcription, config)
+                    presenter_images = _resolve_presenter_images(video_path, config)
                     clip_path, captions_applied, caption_warning = _finalize_editorial_social_clip(
-                        clip_path, clip, config, transcription=transcription
+                        clip_path, clip, config,
+                        transcription=transcription,
+                        player_images=player_images,
+                        presenter_images=presenter_images,
                     )
                 else:
                     # Social/classic: tratamento visual ANTES das legendas (RF-13/14).
@@ -1823,12 +2061,33 @@ def cuts(
         "--futebol",
         help="Inverte o layout social editorial: vídeo (speaker) em cima, imagem IA embaixo. Legenda fica posicionada no meio do painel do vídeo. Força modo social.",
     ),
+    youtube_top: bool = typer.Option(
+        False,
+        "--youtube-top",
+        help="Layout 9:16 com vídeo 16:9 puro (letterbox) em cima e imagem IA embaixo. Legenda no centro vertical do canvas. Força modo social. Tem prioridade sobre --futebol.",
+    ),
+    ref_image: Optional[Path] = typer.Option(
+        None,
+        "--ref-image",
+        help="Imagem de referência usada como guia visual ao gerar a imagem IA do layout social (estilo, paleta e personagens são preservados). Logos/watermarks são removidos automaticamente.",
+    ),
+    presenter: Optional[str] = typer.Option(
+        None,
+        "--presenter",
+        help="Slug(s) do(s) apresentador(es) do catálogo ~/.youcut/apresentadores/ a usar como reference frame nas thumbnails. Múltiplos via vírgula (ex: 'tiago_leifert,outro_slug'). Quando omitido, o sistema tenta detectar via Claude vision nos frames do vídeo.",
+    ),
     yes: bool = typer.Option(False, "--yes", "-y", help="Confirmar automaticamente todas as perguntas interativas"),
 ) -> None:
     """Gera cortes inteligentes (YouTube 16:9 ou redes sociais 9:16) com revisão e publicação."""
     _configure_logging(log_level, log_file)
     thumbnail_text_value = thumbnail_text if isinstance(thumbnail_text, str) else ""
     _check_ffmpeg()
+
+    # --yes implica skip-review: auto-confirma TODAS as prompts interativas,
+    # incluindo a TUI de review (questionary). Sem isso, --yes funciona pra
+    # mode selection mas a TUI de review crasha em modo headless / background.
+    if yes:
+        skip_review = True
 
     if history:
         _handle_history(skip_review=skip_review, upload=upload, platforms_raw=platforms_raw)
@@ -1938,6 +2197,22 @@ def cuts(
             if color_preset == "none":
                 color_preset = "motivacao_lilac"
 
+        # --youtube-top tem prioridade sobre --futebol (split incompatível).
+        if youtube_top and futebol:
+            _console.print(
+                "[yellow]--youtube-top e --futebol definem splits incompatíveis. "
+                "Priorizando --youtube-top; --futebol ignorado.[/yellow]"
+            )
+            futebol = False
+
+        if ref_image is not None and not ref_image.exists():
+            _err_console.print(Panel(
+                f"[red]--ref-image não encontrada:[/red] {ref_image}",
+                title="[red]Configuração incompleta[/red]",
+                border_style="red",
+            ))
+            raise typer.Exit(code=2)
+
         # --futebol = espelho do speaker_bottom_ai_top com vídeo em cima e
         # imagem embaixo. Força modo social. O filtro de cor (--filter) não
         # vale no caminho editorial; avisamos e seguimos com a inversão.
@@ -1954,14 +2229,33 @@ def cuts(
                 )
                 color_preset = "none"
 
+        # --youtube-top: vídeo 16:9 puro em cima + imagem IA embaixo.
+        if youtube_top:
+            if mode != "social":
+                _console.print(
+                    "[yellow]--youtube-top força modo social (9:16). Ignorando --mode anterior.[/yellow]"
+                )
+                mode = "social"
+            if color_preset != "none":
+                _console.print(
+                    f"[yellow]--filter={color_preset} é ignorado em --youtube-top "
+                    f"(o layout editorial não aplica filtros de cor).[/yellow]"
+                )
+                color_preset = "none"
+
         # O preset de cor só faz sentido no layout clássico (o editorial é montado
         # depois pelo social_composer). Se o usuário pediu --filter no modo social,
         # desce para o classic e avisa.
         layout_mode: Literal[
-            "classic", "speaker_bottom_ai_top", "speaker_top_ai_bottom"
+            "classic",
+            "speaker_bottom_ai_top",
+            "speaker_top_ai_bottom",
+            "youtube_top_ai_bottom",
         ]
         if mode == "social":
-            if futebol:
+            if youtube_top:
+                layout_mode = "youtube_top_ai_bottom"
+            elif futebol:
                 layout_mode = "speaker_top_ai_bottom"
             elif color_preset != "none":
                 layout_mode = "classic"
@@ -1999,6 +2293,21 @@ def cuts(
                 social_layout_top_image_height=890,
                 social_layout_title_band_height=140,
             )
+        if youtube_top:
+            # Vídeo 16:9 em cima (1080×608) + imagem IA embaixo (1080×1312).
+            # `social_layout_top_image_height` representa a altura do painel
+            # da imagem (que aqui vai embaixo) — daí 1312.
+            config_kwargs.update(
+                social_layout_top_image_height=1312,
+                social_layout_title_band_height=0,
+                social_layout_title_enabled=False,
+            )
+        if ref_image is not None:
+            config_kwargs["social_image_reference_path"] = ref_image
+        if presenter:
+            parsed_presenters = [s.strip() for s in presenter.split(",") if s.strip()]
+            if parsed_presenters:
+                config_kwargs["presenter_slugs"] = parsed_presenters
         config = PipelineConfig(**config_kwargs)
     except Exception as e:
         _err_console.print(Panel(str(e), title="[red]Erro de Configuração[/red]", border_style="red"))

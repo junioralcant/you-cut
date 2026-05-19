@@ -36,6 +36,13 @@ _PHRASE_STYLE_TOP_PANEL = (
     "Style: Default,Arial,60,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,"
     "-1,0,0,0,100,100,0,0,1,3,1,2,10,10,1450,1"
 )
+# Layout youtube_top_ai_bottom: vídeo 16:9 em y=0..608, imagem IA em y=608..1920.
+# Legenda no centro vertical do canvas (y≈960). Alignment=2 + MarginV=930 coloca
+# o bottom do texto em y≈990, com fontsize=60 → centro do bloco em y≈960.
+_PHRASE_STYLE_CENTER = (
+    "Style: Default,Arial,60,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,"
+    "-1,0,0,0,100,100,0,0,1,3,1,2,10,10,930,1"
+)
 # MarginV define a distância do texto até a borda inferior do canvas
 # (Alignment=2 = bottom-center). Para canvas 1920: MarginV=864 ≈ Y=55% (solo),
 # MarginV=480 ≈ Y=75% (sobre o speaker no layout speaker_bottom_ai_top).

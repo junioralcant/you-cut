@@ -52,6 +52,7 @@ def cut_clip(
     elif clip.cut_mode == "social" and config.social_layout_mode in (
         "speaker_bottom_ai_top",
         "speaker_top_ai_bottom",
+        "youtube_top_ai_bottom",
     ):
         cmd = _build_social_raw_cmd(video_path, clip, config, output_path)
     else:

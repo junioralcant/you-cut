@@ -42,6 +42,7 @@ class PipelineConfig(BaseSettings):
         "classic",
         "speaker_bottom_ai_top",
         "speaker_top_ai_bottom",
+        "youtube_top_ai_bottom",
         "alternating_image",
     ] = "classic"
     social_layout_title_enabled: bool = True
@@ -53,6 +54,7 @@ class PipelineConfig(BaseSettings):
     social_layout_title_bg_color: str = "#F4C400"
     social_layout_title_text_color: str = "#111111"
     social_visual_style_enabled: bool = True
+    social_image_reference_path: Path | None = None
 
     decoupage_enabled: bool = True
     decoupage_noise_db: float = -30.0
@@ -74,6 +76,23 @@ class PipelineConfig(BaseSettings):
     runway_api_key: str | None = None
     fal_api_key: str | None = None
     replicate_api_token: str | None = None
+
+    # Catálogo local de imagens de jogadores. Usado pelo módulo youcut.players
+    # para injetar a foto do jogador como reference frame na geração de
+    # thumbnails / imagens sociais quando o nome dele aparece no clipe.
+    players_dir: Path = Path.home() / ".youcut" / "players"
+
+    # Catálogo local de imagens de apresentadores / hosts. Usado pelo módulo
+    # youcut.presenters: Claude vision identifica qual apresentador aparece
+    # nos frames do vídeo (uma vez por source) e a foto é prepended como
+    # reference frame nas thumbnails. Independente do players_dir — ambos
+    # podem entrar simultaneamente.
+    presenters_dir: Path = Path.home() / ".youcut" / "apresentadores"
+
+    # Override manual da detecção de apresentadores. Quando definido, pula
+    # a chamada Claude vision e usa os slugs informados (ex.: ["tiago_leifert"]).
+    # Setado pela flag CLI ``--presenter SLUG1,SLUG2``.
+    presenter_slugs: list[str] | None = None
     comic_max_panels: int = 30
     comic_cost_cap_usd: float = 10.0
     comic_image_provider: Literal["gpt-image-1"] = "gpt-image-1"

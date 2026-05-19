@@ -273,16 +273,24 @@ def compose_social_clip(
     *,
     transcription: TranscriptionResult | None = None,
     source_clip_path: Path | None = None,
+    player_images: list[bytes] | None = None,
+    presenter_images: list[bytes] | None = None,
 ) -> Path:
     if config.social_layout_mode == "alternating_image":
         return _compose_alternating_image_clip(
-            clip_path, clip, config, transcription, source_clip_path
+            clip_path, clip, config, transcription, source_clip_path,
+            player_images=player_images,
+            presenter_images=presenter_images,
         )
     output_dir = clip_path.parent
     label_text, suggested_color_mode = generate_social_label(clip, config)
     style = select_band_style(clip_path.stem)
     logger.info("Social composer: band style preset=%s for clip=%s", style.name, clip_path.stem)
-    inverted = config.social_layout_mode == "speaker_top_ai_bottom"
+    is_youtube_top = config.social_layout_mode == "youtube_top_ai_bottom"
+    inverted = config.social_layout_mode in (
+        "speaker_top_ai_bottom",
+        "youtube_top_ai_bottom",
+    )
     top_h = config.social_layout_top_image_height
     band_h = config.social_layout_title_band_height if config.social_layout_title_enabled else 0
     header_h = top_h + band_h
@@ -299,6 +307,8 @@ def compose_social_clip(
         suggested_color_mode=suggested_color_mode,
         style=style,
         inverted=inverted,
+        player_images=player_images,
+        presenter_images=presenter_images,
     )
     output_path = clip_path.with_stem(clip_path.stem + "_social")
 
@@ -307,14 +317,24 @@ def compose_social_clip(
         raise ValueError("Alturas do layout social inválidas; bottom panel ficou sem espaço")
 
     src_w, src_h = _probe_video_dimensions(clip_path)
-    face_y_norm = _detect_face_y_norm(clip_path)
-    bottom_crop = _build_bottom_crop_filter(
-        src_w=src_w,
-        src_h=src_h,
-        target_w=_CANVAS_W,
-        target_h=bottom_h,
-        face_y_norm=face_y_norm,
-    )
+    if is_youtube_top:
+        # Vídeo top respeita aspect 16:9 nativo com letterbox preto se necessário
+        # (sem crop, sem face tracking) — o painel do vídeo é a "tela cheia
+        # YouTube" do criador, então preservar o framing original importa mais
+        # que encher o canvas.
+        bottom_crop = (
+            f"scale={_CANVAS_W}:{bottom_h}:force_original_aspect_ratio=decrease,"
+            f"pad={_CANVAS_W}:{bottom_h}:(ow-iw)/2:(oh-ih)/2:color=black"
+        )
+    else:
+        face_y_norm = _detect_face_y_norm(clip_path)
+        bottom_crop = _build_bottom_crop_filter(
+            src_w=src_w,
+            src_h=src_h,
+            target_w=_CANVAS_W,
+            target_h=bottom_h,
+            face_y_norm=face_y_norm,
+        )
 
     if inverted:
         # Layout futebol: speaker em y=0 (alto), painel composto (band+image) em
@@ -463,6 +483,9 @@ def _compose_alternating_image_clip(
     config: PipelineConfig,
     transcription: TranscriptionResult | None,
     source_clip_path: Path | None,
+    *,
+    player_images: list[bytes] | None = None,
+    presenter_images: list[bytes] | None = None,
 ) -> Path:
     """Compõe um clipe 1080×1920 com speaker constante e imagem flutuando.
 
@@ -495,7 +518,11 @@ def _compose_alternating_image_clip(
             )
 
     # 2) Gera UMA imagem IA reusando o pipeline existente.
-    top_image_path = generate_social_top_image(clip, output_dir, clip_path, config)
+    top_image_path = generate_social_top_image(
+        clip, output_dir, clip_path, config,
+        player_images=player_images,
+        presenter_images=presenter_images,
+    )
     img_resized = _write_resized_png(
         top_image_path.read_bytes(),
         width=_CANVAS_W,
@@ -689,8 +716,14 @@ def _render_social_header_image(
     suggested_color_mode: str | None,
     style: BandStyle = _DEFAULT_STYLE,
     inverted: bool = False,
+    player_images: list[bytes] | None = None,
+    presenter_images: list[bytes] | None = None,
 ) -> Path:
-    top_image_path = generate_social_top_image(clip, output_dir, clip_path, config)
+    top_image_path = generate_social_top_image(
+        clip, output_dir, clip_path, config,
+        player_images=player_images,
+        presenter_images=presenter_images,
+    )
     fallback_path = _render_social_header_image_local(
         top_image_path=top_image_path,
         title=title,

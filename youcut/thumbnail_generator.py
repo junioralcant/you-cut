@@ -35,6 +35,15 @@ _THUMBNAIL_SKILL_PATH = _REPO_ROOT / ".claude" / "skills" / "thumbnail-generator
 _THUMBNAIL_PRD_PATH = _REPO_ROOT / ".claude" / "skills" / "thumbnail-generator" / "prd.md"
 _THUMBNAIL_SKILL_SCRIPT_PATH = _REPO_ROOT / ".claude" / "skills" / "thumbnail-generator" / "scripts" / "generate_thumbnail.py"
 
+# google/nano-banana (Gemini 2.5 Flash Image) via Replicate. Multi-ref nativo
+# (image_input até 3 imagens). Foi descartado em 2026-05-19 por safety filter
+# Gemini bloquear celebridades ("E005 input/output flagged as sensitive"), mas
+# usuário pediu pra retestar — se voltar a bloquear, cai no fallback OpenAI →
+# Pillow local automaticamente via dispatcher em _run_thumbnail_skill_script.
+# Não-pinned por enquanto (testando); pinar depois que confirmar funcionamento.
+_REPLICATE_IMAGE_MODEL = "google/nano-banana"
+_REPLICATE_MAX_REF_IMAGES = 3
+
 ImageCostProfile = Literal["standard", "social"]
 
 _PROFILE_REQUEST_PARAMS: dict[ImageCostProfile, tuple[str, str, str]] = {
@@ -77,6 +86,8 @@ def generate_thumbnail(
     clip_path: Path | None = None,
     config: "PipelineConfig | None" = None,
     cut_mode: CutMode | None = None,
+    player_images: list[bytes] | None = None,
+    presenter_images: list[bytes] | None = None,
 ) -> Path:
     thumbnails_dir = output_dir / "thumbnails"
     thumbnails_dir.mkdir(parents=True, exist_ok=True)
@@ -87,7 +98,11 @@ def generate_thumbnail(
         raise ValueError(f"clip_path não fornecido ou não existe: {clip_path}")
 
     effective_config = _apply_cut_mode_override(config, cut_mode)
-    result = _build_thumbnail_result(clip, source, output_path, effective_config)
+    result = _build_thumbnail_result(
+        clip, source, output_path, effective_config,
+        player_images=player_images,
+        presenter_images=presenter_images,
+    )
     logger.info(
         "Thumbnail gerada: path=%s timestamp=%.2f selection_method=%s generation_method=%s",
         result.output_path,
@@ -111,6 +126,8 @@ def generate_social_top_image(
     output_dir: Path,
     clip_path: Path,
     config: "PipelineConfig | None" = None,
+    player_images: list[bytes] | None = None,
+    presenter_images: list[bytes] | None = None,
 ) -> Path:
     social_dir = output_dir / "social_images"
     social_dir.mkdir(parents=True, exist_ok=True)
@@ -129,9 +146,45 @@ def generate_social_top_image(
         fallback_frame = _extract_frame(clip_path)
         reference_frames = [fallback_frame]
 
+    # Reference image opcional (ex: thumbnail-style com personagens canônicos).
+    # Quando presente, EXCLUI os frames de vídeo da lista — o seedream/nano
+    # remixa todas as referências igualmente, e os frames de vídeo "diluem"
+    # os personagens da ref-image (validado 2026-05-19: passar 5 frames com
+    # 4 frames vindo do estúdio REACT fez o modelo trocar os jogadores
+    # pelos apresentadores). Mantemos o fallback_frame separado pro caso
+    # do provider AI falhar e cair pro fallback local.
+    ref_path = getattr(config, "social_image_reference_path", None) if config is not None else None
+    has_character_reference = False
+    if ref_path is not None:
+        try:
+            ref_bytes = Path(ref_path).read_bytes()
+            reference_frames = [ref_bytes]
+            has_character_reference = True
+        except Exception as exc:
+            logger.warning("Falha ao ler --ref-image (%s): %s — seguindo sem ela", ref_path, exc)
+
+    # Auto-ref de jogadores + apresentadores: ambos são prepended ao
+    # reference_frames. Jogadores vêm PRIMEIRO (anchor canônico — protagonista
+    # do clipe), apresentador EM SEGUIDA (peso menor, elemento de brand).
+    # Ambos ativam character-reference (mesmo tratamento da ref-image manual).
+    auto_refs: list[bytes] = []
+    if player_images:
+        auto_refs.extend(player_images)
+    if presenter_images:
+        auto_refs.extend(presenter_images)
+    if auto_refs:
+        reference_frames = [*auto_refs, *reference_frames]
+        has_character_reference = True
+        logger.info(
+            "Auto-ref na imagem social: %d jogador(es) + %d apresentador(es) prepended (jogador primeiro)",
+            len(player_images or []),
+            len(presenter_images or []),
+        )
+
     prompt = _build_social_image_generation_prompt(
         clip,
         transcript_visual_context=_build_transcript_visual_context(clip_path, clip.title, anthropic_client),
+        has_character_reference=has_character_reference,
     )
 
     image_bytes, generation_method = _generate_social_image_bytes(
@@ -176,6 +229,8 @@ def _build_thumbnail_result(
     source: Path,
     output_path: Path,
     config: "PipelineConfig | str | None",
+    player_images: list[bytes] | None = None,
+    presenter_images: list[bytes] | None = None,
 ) -> ThumbnailFrameResult:
     pipeline_config = config if not isinstance(config, str) else None
     frames = _extract_frames_candidates(source)
@@ -219,6 +274,8 @@ def _build_thumbnail_result(
             clip_context=clip_context,
             transcript_visual_context=transcript_visual_context,
             config=pipeline_config,
+            player_images=player_images,
+            presenter_images=presenter_images,
         )
     else:
         thumbnail_bytes, generation_method = _generate_thumbnail_via_ai_result(
@@ -231,6 +288,8 @@ def _build_thumbnail_result(
             clip_context=clip_context,
             transcript_visual_context=transcript_visual_context,
             config=pipeline_config,
+            player_images=player_images,
+            presenter_images=presenter_images,
         )
 
     image = _load_image_from_bytes(thumbnail_bytes)
@@ -674,8 +733,10 @@ def _generate_thumbnail_via_ai_result(
     clip_context: str = "",
     transcript_visual_context: str = "",
     config: "PipelineConfig | None" = None,
+    player_images: list[bytes] | None = None,
+    presenter_images: list[bytes] | None = None,
 ) -> tuple[bytes, str]:
-    if openai_client is None:
+    if openai_client is None and not _resolve_replicate_token(config):
         logger.warning("Cliente OpenAI ausente; usando fallback local para geração de thumbnail")
         return _render_local_thumbnail_bytes(frame_bytes), "local"
 
@@ -686,6 +747,25 @@ def _generate_thumbnail_via_ai_result(
         transcript_visual_context=transcript_visual_context,
     )
     reference_frame_bytes = reference_frames or [frame_bytes]
+    # Auto-ref de jogadores + apresentadores: ordem de prioridade no prepend
+    # (com cap implícito do provider — nano-banana só consome até
+    # _REPLICATE_MAX_REF_IMAGES). Jogadores PRIMEIRO (anchor canônico — são
+    # o assunto do clipe), apresentador EM SEGUIDA (peso menor, secundário),
+    # depois frames de vídeo. Decisão de produto: o jogador mencionado é o
+    # protagonista visual; o host fica como elemento de brand sem competir
+    # com o destaque.
+    auto_refs: list[bytes] = []
+    if player_images:
+        auto_refs.extend(player_images)
+    if presenter_images:
+        auto_refs.extend(presenter_images)
+    if auto_refs:
+        reference_frame_bytes = [*auto_refs, *reference_frame_bytes]
+        logger.info(
+            "Auto-ref na thumbnail: %d jogador(es) + %d apresentador(es) prepended (jogador primeiro)",
+            len(player_images or []),
+            len(presenter_images or []),
+        )
 
     try:
         image_bytes = _run_thumbnail_skill_script(
@@ -1077,6 +1157,70 @@ def _resolve_openai_api_key(
     return os.getenv("OPENAI_API_KEY")
 
 
+def _resolve_replicate_token(config: "PipelineConfig | str | None") -> str | None:
+    if isinstance(config, str):
+        return None
+    if config is not None:
+        token = getattr(config, "replicate_api_token", None)
+        if token:
+            return token
+    return os.getenv("REPLICATE_API_TOKEN")
+
+
+def _generate_via_replicate_image(
+    prompt: str,
+    reference_frames: list[bytes],
+    *,
+    token: str,
+    timeout: float = 180.0,
+) -> bytes:
+    """Gera 1 imagem via google/nano-banana na Replicate.
+
+    `image_input` aceita até 3 imagens — primeira é o canvas canônico (ou
+    primeiro player_image no auto-ref), as demais são contexto. Output é
+    sempre 1 imagem (nano-banana retorna URI única, não lista). Atenção:
+    safety filter do Gemini pode disparar em retratos editoriais com
+    celebridades reais (caso emite ``E005 input/output flagged as
+    sensitive`` — caller cai no fallback OpenAI automaticamente).
+    """
+    if not reference_frames:
+        raise ValueError("Pelo menos uma reference frame é obrigatória")
+
+    import httpx
+    import replicate
+
+    client = replicate.Client(api_token=token)
+    bounded_frames = reference_frames[:_REPLICATE_MAX_REF_IMAGES]
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir_path = Path(tmpdir)
+        handles: list[Any] = []
+        try:
+            for index, frame_bytes in enumerate(bounded_frames):
+                frame_path = tmpdir_path / f"ref_{index:02d}.png"
+                frame_path.write_bytes(frame_bytes)
+                handles.append(open(frame_path, "rb"))
+            output = client.run(
+                _REPLICATE_IMAGE_MODEL,
+                input={
+                    "prompt": prompt,
+                    "image_input": handles,
+                    "output_format": "png",
+                },
+            )
+        finally:
+            for handle in handles:
+                try:
+                    handle.close()
+                except Exception:
+                    pass
+
+    item = output[0] if isinstance(output, list) else output
+    if hasattr(item, "read"):
+        return item.read()
+    return httpx.get(str(item), timeout=timeout).content
+
+
 def _run_thumbnail_skill_script(
     prompt: str,
     reference_frames: list[bytes],
@@ -1084,15 +1228,40 @@ def _run_thumbnail_skill_script(
     timeout: float,
     config: "PipelineConfig | None" = None,
 ) -> bytes:
-    if not openai_api_key:
-        raise ValueError("OPENAI_API_KEY indisponível para o backend da skill de thumbnail")
     if not reference_frames:
         raise ValueError("Nenhum frame de referência disponível para a geração da thumbnail")
+
+    # Provider primário: Replicate google/nano-banana (Gemini 2.5 Flash Image).
+    # Pode bater no safety filter do Gemini em retratos editoriais com
+    # celebridades reais — quando isso acontece, exception → fallback OpenAI.
+    replicate_token = _resolve_replicate_token(config)
+    if replicate_token:
+        logger.info(
+            "Thumbnail skill: provider=replicate model=%s frames=%d",
+            _REPLICATE_IMAGE_MODEL,
+            min(len(reference_frames), _REPLICATE_MAX_REF_IMAGES),
+        )
+        try:
+            return _generate_via_replicate_image(
+                prompt, reference_frames, token=replicate_token, timeout=timeout,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Replicate %s falhou (%s); tentando fallback OpenAI",
+                _REPLICATE_IMAGE_MODEL, exc,
+            )
+
+    # Fallback: OpenAI gpt-image-1.5 via skill script.
+    if not openai_api_key:
+        raise ValueError(
+            "Nenhum provider de imagem disponível: REPLICATE_API_TOKEN ausente/falhou "
+            "e OPENAI_API_KEY também não está configurada."
+        )
 
     profile = _resolve_image_cost_profile(config)
     model, size, quality = _resolve_image_request_params(profile)
     logger.info(
-        "Thumbnail skill: profile=%s model=%s size=%s quality=%s frames=%d",
+        "Thumbnail skill: provider=openai profile=%s model=%s size=%s quality=%s frames=%d",
         profile,
         model,
         size,
@@ -1149,15 +1318,20 @@ def _generate_social_image_bytes(
     timeout: float = 60.0,
     config: "PipelineConfig | None" = None,
 ) -> tuple[bytes, str]:
-    if provider == "local" or openai_client is None:
+    replicate_token = _resolve_replicate_token(config)
+    if provider == "local" or (openai_client is None and not replicate_token):
         logger.warning("Geração social por IA indisponível; usando fallback local")
         return _resize_image_bytes(fallback_frame_bytes, target_size=target_size), "local"
+
+    resolved_openai_key = openai_api_key or (
+        _resolve_openai_api_key(None, openai_client) if openai_client is not None else None
+    )
 
     try:
         image_bytes = _run_thumbnail_skill_script(
             prompt=prompt,
             reference_frames=reference_frames,
-            openai_api_key=openai_api_key or _resolve_openai_api_key(None, openai_client),
+            openai_api_key=resolved_openai_key,
             timeout=timeout,
             config=config,
         )
@@ -1372,7 +1546,30 @@ def _build_thumbnail_generation_prompt(
 def _build_social_image_generation_prompt(
     clip: ViralClip,
     transcript_visual_context: str = "",
+    has_character_reference: bool = False,
 ) -> str:
+    if has_character_reference:
+        # Modo "ref-image com personagens": o primeiro reference frame é uma
+        # imagem canônica (ex: thumbnail editorial) cujo estilo + composição
+        # devem ser preservados. Linguagem deliberadamente focada em estilo
+        # editorial e uniformes (não em "identidades exatas") pra evitar
+        # safety filters de provedores de imagem (Gemini/Seedream/etc).
+        prompt_parts = [
+            "Create a vibrant editorial sports illustration for the bottom panel of a 9:16 short-form video.",
+            "The image will occupy a 1080x1312 region of a 1080x1920 composition.",
+            "Use the FIRST reference image as the canonical visual template: reproduce the same overall group composition, the same number of figures, the same uniform designs (yellow/green Brazilian national team jerseys), the same accessories, the same framing layout, the same color palette, and the same editorial mood and lighting.",
+            "Treat it as a stylized editorial illustration in the same visual style — vibrant cinematic editorial sports artwork.",
+            "REMOVE ALL TEXT, LOGOS, AND BROADCASTER BRANDING that appears in the reference image. No 'Cazé TV', no 'KZTV', no 'FIFA' logo or trophy text, no station badges, no channel watermarks, no overlay text, no headlines, no taglines like 'AO VIVO' / 'LIVE', no scoreboard text.",
+            "Absolutely no readable text anywhere in the final image — letters, numbers, signage, or typography of any kind.",
+            f"Topic / context of this specific clip: {clip.title}.",
+            f"Editorial hook: {clip.social_hook_title or clip.title}.",
+            f"Scene direction (apply within the canonical template): {clip.social_image_prompt or clip.thumbnail_idea}.",
+            f"Visual style notes: {clip.social_visual_style or 'editorial vibrante, alto contraste'}."
+        ]
+        if transcript_visual_context.strip():
+            prompt_parts.append(f"Secondary symbolic cues: {transcript_visual_context.strip()}.")
+        return " ".join(part for part in prompt_parts if part).strip()
+
     prompt_parts = [
         "Create a strong editorial still image for the top half of a short-form vertical social video.",
         "The image will occupy the top panel of a 1080x1920 composition.",

@@ -104,6 +104,7 @@ class CaptionBurner:
             _WORD_STYLE,
             _PHRASE_STYLE,
             _PHRASE_STYLE_TOP_PANEL,
+            _PHRASE_STYLE_CENTER,
             _format_ass_time,
             _escape_ass,
         )
@@ -129,6 +130,8 @@ class CaptionBurner:
             style = _PHRASE_STYLE
         elif layout_mode == "top_panel":
             style = _PHRASE_STYLE_TOP_PANEL
+        elif layout_mode == "center":
+            style = _PHRASE_STYLE_CENTER
         else:
             style = _WORD_STYLE
         ass_content = _ASS_HEADER.format(res_x=1080, res_y=1920, style=style) + "\n".join(words) + "\n"
