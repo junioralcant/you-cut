@@ -33,6 +33,8 @@ from youcut.music.provider import YouTubeMusicProvider
 from youcut.preview import generate_clip_preview
 from youcut.reviewer import review_clips
 from youcut.players import (
+    PlayerSegment,
+    build_player_timeline,
     detect_players,
     disambiguate_mentions,
     load_catalog,
@@ -1013,6 +1015,98 @@ def _resolve_player_images(
     return images
 
 
+def _resolve_player_panel_subject(
+    clip: ViralClip,
+    transcription: TranscriptionResult | None,
+    config: PipelineConfig,
+) -> tuple[str, bytes] | None:
+    """Identifica o jogador MAIS CITADO no transcript do clipe e devolve
+    ``(display_name, photo_bytes)``.
+
+    Usada quando ``config.player_panel_use_local=True`` para gerar o painel
+    "imagem IA" diretamente a partir da foto local. Conta menções resolvidas
+    (após desambiguação) e retorna ``None`` quando o catálogo não existe,
+    não há transcrição, ou nada foi detectado.
+    """
+    if transcription is None:
+        return None
+    catalog = _get_player_catalog(config)
+    if catalog is None:
+        return None
+    words = slice_transcript_for_clip(transcription, clip.start_time, clip.end_time)
+    if not words:
+        return None
+    raw_mentions = detect_players(words, catalog)
+    if not raw_mentions:
+        return None
+
+    anthropic_client = None
+    if config.anthropic_api_key:
+        try:
+            from anthropic import Anthropic
+            anthropic_client = Anthropic(api_key=config.anthropic_api_key)
+        except Exception as exc:
+            logger.warning("Anthropic client indisponível pra desambiguação: %s", exc)
+
+    resolved = disambiguate_mentions(
+        raw_mentions, words, anthropic_client, config.claude_model
+    )
+    if not resolved:
+        return None
+
+    counts: dict[str, int] = {}
+    profile_by_slug: dict[str, object] = {}
+    for mention in resolved:
+        counts[mention.profile.slug] = counts.get(mention.profile.slug, 0) + 1
+        profile_by_slug[mention.profile.slug] = mention.profile
+    top_slug = max(counts, key=lambda s: counts[s])
+    top_profile = profile_by_slug[top_slug]
+    try:
+        photo_bytes = top_profile.image_path.read_bytes()  # type: ignore[attr-defined]
+    except OSError as exc:
+        logger.warning(
+            "Falha ao ler foto do jogador %s para player_panel: %s", top_slug, exc,
+        )
+        return None
+    logger.info(
+        "Player panel: clipe %r → %s (%d cita(s))",
+        clip.title, top_slug, counts[top_slug],
+    )
+    return top_profile.display_name, photo_bytes  # type: ignore[attr-defined]
+
+
+def _resolve_player_timeline(
+    clip: ViralClip,
+    transcription: TranscriptionResult | None,
+    config: PipelineConfig,
+) -> list[PlayerSegment]:
+    """Constrói a timeline de painéis de jogador para o clipe.
+
+    Espelha a autenticação Claude do ``_resolve_player_panel_subject``
+    (necessária pra desambiguação de "Danilo"/"Danilo" etc.). Retorna
+    lista vazia quando o catálogo está ausente, não há transcrição, ou
+    nenhuma menção foi detectada.
+    """
+    catalog = _get_player_catalog(config)
+    if catalog is None:
+        return []
+    anthropic_client = None
+    if config.anthropic_api_key:
+        try:
+            from anthropic import Anthropic
+            anthropic_client = Anthropic(api_key=config.anthropic_api_key)
+        except Exception as exc:
+            logger.warning("Anthropic client indisponível pra timeline: %s", exc)
+    return build_player_timeline(
+        transcription,
+        clip.start_time,
+        clip.end_time,
+        catalog,
+        anthropic_client=anthropic_client,
+        claude_model=config.claude_model,
+    )
+
+
 # Cache do catálogo de apresentadores por (path, mtime). Mesmo padrão do
 # _PLAYER_CATALOG_CACHE.
 _PRESENTER_CATALOG_CACHE: dict[tuple[str, float], object] = {}
@@ -1119,6 +1213,27 @@ def _finalize_editorial_social_clip(
 ) -> tuple[Path, bool, str | None]:
     composed_path = clip_path
     is_youtube_top = config.social_layout_mode == "youtube_top_ai_bottom"
+    is_futebol_inverted = config.social_layout_mode == "speaker_top_ai_bottom"
+    player_panel_subject: tuple[str, bytes] | None = None
+    player_timeline: list[PlayerSegment] = []
+    if config.player_panel_use_local:
+        if is_futebol_inverted:
+            # No layout futebol, construímos a timeline completa (foto por
+            # menção) — quando o usuário só citou um jogador, o composer
+            # cai automaticamente no painel estático tradicional.
+            player_timeline = _resolve_player_timeline(clip, transcription, config)
+            distinct = {seg.profile.slug for seg in player_timeline}
+            if len(distinct) >= 2:
+                logger.info(
+                    "Player timeline: %d segmento(s), %d jogador(es) distinto(s) — usando painel dinâmico",
+                    len(player_timeline), len(distinct),
+                )
+            else:
+                # Cai pro caminho estático tradicional.
+                player_timeline = []
+                player_panel_subject = _resolve_player_panel_subject(clip, transcription, config)
+        else:
+            player_panel_subject = _resolve_player_panel_subject(clip, transcription, config)
     try:
         if config.social_layout_mode == "alternating_image":
             # No alternating_image o speaker ocupa 60% (1152px); imagem 40%.
@@ -1147,6 +1262,8 @@ def _finalize_editorial_social_clip(
             source_clip_path=source_clip_path,
             player_images=player_images,
             presenter_images=presenter_images,
+            player_panel_subject=player_panel_subject,
+            player_timeline=player_timeline,
         )
     except Exception as exc:
         logger.warning("Social composer falhou; usando clipe base %s: %s", clip_path.name, exc)
@@ -2076,6 +2193,26 @@ def cuts(
         "--presenter",
         help="Slug(s) do(s) apresentador(es) do catálogo ~/.youcut/apresentadores/ a usar como reference frame nas thumbnails. Múltiplos via vírgula (ex: 'tiago_leifert,outro_slug'). Quando omitido, o sistema tenta detectar via Claude vision nos frames do vídeo.",
     ),
+    players_dir: Optional[Path] = typer.Option(
+        None,
+        "--players-dir",
+        help="Pasta com fotos dos jogadores (1 arquivo por jogador, slug no nome — ex: 'vinicius_junior.jpg'). Override do default ~/.youcut/players.",
+    ),
+    players_panel: bool = typer.Option(
+        False,
+        "--players-panel",
+        help="No painel 'imagem IA' do layout social, usa diretamente a foto local do jogador mencionado (mais citado no clipe) com o nome em legenda, em vez de gerar via IA. Requer --players-dir.",
+    ),
+    face_roi: Optional[str] = typer.Option(
+        None,
+        "--face-roi",
+        help="Restringe a busca de rostos a uma ROI absoluta do frame source. Formato 'X,Y,W,H' em pixels (ex: '0,40,440,580' = coluna esquerda). Detecções fora dessa caixa são descartadas. Implicitamente liga --face-tracking.",
+    ),
+    face_alternate_chunk: float = typer.Option(
+        0.0,
+        "--face-alternate-chunk",
+        help="Quando > 0 e o detector vê 2 rostos consistentes dentro da ROI, alterna o close entre eles a cada N segundos (em vez de split-screen). Útil sem diarização (HUGGINGFACE_TOKEN).",
+    ),
     yes: bool = typer.Option(False, "--yes", "-y", help="Confirmar automaticamente todas as perguntas interativas"),
 ) -> None:
     """Gera cortes inteligentes (YouTube 16:9 ou redes sociais 9:16) com revisão e publicação."""
@@ -2098,6 +2235,9 @@ def cuts(
     # RF-01: seleção do modo como primeira etapa
     if mode in ("social", "youtube"):
         cut_mode: CutMode = mode  # type: ignore[assignment]
+    elif futebol or motivacao or youtube_top:
+        # Presets de layout social pulam o prompt — eles só fazem sentido em 9:16.
+        cut_mode = "social"
     else:
         cut_mode = _select_cut_mode()
     mode = cut_mode
@@ -2289,10 +2429,33 @@ def cuts(
             )
         if futebol:
             # Split 50/50: speaker 890 + band 140 + image 890 = 1920.
+            # `social_visual_style_enabled=False` desliga o tratamento visual
+            # global (cor fria + cantos arredondados + vinheta) — a band amarela
+            # + painel verde do --futebol já entregam a identidade editorial
+            # e o filtro extra escurece demais o rosto do apresentador.
             config_kwargs.update(
                 social_layout_top_image_height=890,
                 social_layout_title_band_height=140,
+                social_visual_style_enabled=False,
             )
+            # Auto-enable painel local quando há catálogo populado de jogadores.
+            # Fallback gracioso: catálogo vazio → painel cai pra imagem IA padrão.
+            default_players_dir = Path.home() / ".youcut" / "players"
+            effective_players_dir = players_dir or default_players_dir
+            has_player_catalog = (
+                effective_players_dir.exists()
+                and effective_players_dir.is_dir()
+                and any(
+                    p.is_file() and p.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp"}
+                    for p in effective_players_dir.iterdir()
+                )
+            )
+            if has_player_catalog:
+                config_kwargs["player_panel_use_local"] = True
+                _console.print(
+                    f"[cyan]--futebol: catálogo de jogadores em {effective_players_dir} "
+                    "→ painel local com troca dinâmica por menção ativado.[/cyan]"
+                )
         if youtube_top:
             # Vídeo 16:9 em cima (1080×608) + imagem IA embaixo (1080×1312).
             # `social_layout_top_image_height` representa a altura do painel
@@ -2308,6 +2471,34 @@ def cuts(
             parsed_presenters = [s.strip() for s in presenter.split(",") if s.strip()]
             if parsed_presenters:
                 config_kwargs["presenter_slugs"] = parsed_presenters
+        if players_dir is not None:
+            config_kwargs["players_dir"] = players_dir
+        if players_panel:
+            if players_dir is None and not (Path.home() / ".youcut" / "players").exists():
+                _err_console.print(
+                    "[red]--players-panel exige --players-dir (ou pasta ~/.youcut/players populada).[/red]"
+                )
+                raise typer.Exit(code=1)
+            config_kwargs["player_panel_use_local"] = True
+            # Sem face_tracking ligado, o painel de baixo aparece, mas o speaker
+            # em cima fica com crop genérico. Para o caso de uso típico (vídeo
+            # com 2 reactors numa coluna), ligar tracking ajuda. O usuário pode
+            # desligar manualmente passando FACE_TRACKING=false no env.
+            config_kwargs.setdefault("face_tracking", True)
+        if face_roi:
+            try:
+                parts = [int(x.strip()) for x in face_roi.split(",")]
+                if len(parts) != 4:
+                    raise ValueError("esperado 4 inteiros separados por vírgula")
+                config_kwargs["face_detection_roi"] = tuple(parts)  # type: ignore[arg-type]
+                config_kwargs["face_tracking"] = True
+            except ValueError as e:
+                _err_console.print(
+                    f"[red]--face-roi inválido ({e}). Formato esperado: 'X,Y,W,H' em pixels.[/red]"
+                )
+                raise typer.Exit(code=1)
+        if face_alternate_chunk > 0:
+            config_kwargs["face_alternate_chunk_s"] = face_alternate_chunk
         config = PipelineConfig(**config_kwargs)
     except Exception as e:
         _err_console.print(Panel(str(e), title="[red]Erro de Configuração[/red]", border_style="red"))

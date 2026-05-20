@@ -16,6 +16,7 @@ from typing import Literal
 from youcut.config import PipelineConfig
 from youcut.face_tracker import _BBox  # bbox tuple usado pelos crops dual
 from youcut.models import TranscriptionResult, ViralClip, WordTimestamp
+from youcut.players.timeline import PlayerSegment
 from youcut.social_band_styles import BandStyle, PRESETS, select_band_style
 from youcut.thumbnail_generator import (
     _build_ai_clients,
@@ -275,6 +276,8 @@ def compose_social_clip(
     source_clip_path: Path | None = None,
     player_images: list[bytes] | None = None,
     presenter_images: list[bytes] | None = None,
+    player_panel_subject: tuple[str, bytes] | None = None,
+    player_timeline: list[PlayerSegment] | None = None,
 ) -> Path:
     if config.social_layout_mode == "alternating_image":
         return _compose_alternating_image_clip(
@@ -284,7 +287,18 @@ def compose_social_clip(
         )
     output_dir = clip_path.parent
     label_text, suggested_color_mode = generate_social_label(clip, config)
-    style = select_band_style(clip_path.stem)
+    if config.social_layout_mode == "speaker_top_ai_bottom":
+        # --futebol: pinamos `sticker_punch` (ArchivoBlack-Regular). Fontes
+        # geométricas pesadas como esta têm strokes ~10px nas letras maiores,
+        # então sobrevivem bem ao chroma subsampling do h264 4:2:0. Fontes
+        # condensadas (Anton em burst_attention/tabloid_bold) têm strokes
+        # finos que viram texto distorcido depois do encode.
+        style = next(
+            (p for p in PRESETS if p.name == "sticker_punch"),
+            select_band_style(clip_path.stem),
+        )
+    else:
+        style = select_band_style(clip_path.stem)
     logger.info("Social composer: band style preset=%s for clip=%s", style.name, clip_path.stem)
     is_youtube_top = config.social_layout_mode == "youtube_top_ai_bottom"
     inverted = config.social_layout_mode in (
@@ -293,6 +307,25 @@ def compose_social_clip(
     )
     top_h = config.social_layout_top_image_height
     band_h = config.social_layout_title_band_height if config.social_layout_title_enabled else 0
+
+    if (
+        player_timeline
+        and inverted
+        and config.social_layout_mode == "speaker_top_ai_bottom"
+        and len({s.profile.slug for s in player_timeline}) >= 2
+    ):
+        return _compose_player_timeline_clip(
+            clip_path=clip_path,
+            clip=clip,
+            config=config,
+            timeline=player_timeline,
+            label_text=label_text,
+            suggested_color_mode=suggested_color_mode,
+            style=style,
+            top_h=top_h,
+            band_h=band_h,
+        )
+
     header_h = top_h + band_h
     header_image_path = _render_social_header_image(
         clip=clip,
@@ -309,6 +342,7 @@ def compose_social_clip(
         inverted=inverted,
         player_images=player_images,
         presenter_images=presenter_images,
+        player_panel_subject=player_panel_subject,
     )
     output_path = clip_path.with_stem(clip_path.stem + "_social")
 
@@ -380,6 +414,155 @@ def compose_social_clip(
         header_image_path.unlink(missing_ok=True)
 
     logger.info("Social composer: final clip generated at %s", output_path)
+    return output_path
+
+
+def _compose_player_timeline_clip(
+    *,
+    clip_path: Path,
+    clip: ViralClip,
+    config: PipelineConfig,
+    timeline: list[PlayerSegment],
+    label_text: str,
+    suggested_color_mode: str | None,
+    style: BandStyle,
+    top_h: int,
+    band_h: int,
+) -> Path:
+    """Renderiza o layout futebol com painel de jogador trocando ao longo do tempo.
+
+    Speaker fica em cima (y=0, altura ``bottom_h``), tarja de título no meio
+    (renderizada uma vez), e painéis de jogador comutam por ``enable=between``
+    de acordo com a ``timeline``. Cada jogador único entra como input separado
+    no ffmpeg (PNG looped via ``-loop 1``), o que evita re-encode de imagens
+    e mantém o filter_complex linear.
+    """
+    from youcut.player_panel import compose_player_panel
+
+    output_dir = clip_path.parent
+    bottom_h = _CANVAS_H - top_h - band_h
+    if bottom_h <= 0:
+        raise ValueError("Alturas do layout social inválidas; bottom panel ficou sem espaço")
+
+    band_path = _render_title_band_image_local(
+        label_text,
+        config.model_copy(
+            update={
+                "social_layout_title_color_mode": suggested_color_mode
+                if suggested_color_mode in {"yellow", "orange"}
+                else config.social_layout_title_color_mode
+            }
+        ),
+        width=_CANVAS_W,
+        height=band_h,
+        style=style,
+    )
+
+    # Dedup por slug — geramos UM PNG por jogador distinto, mesmo que ele
+    # apareça em vários segmentos. Economiza render e mantém o filter mais curto.
+    panels_by_slug: dict[str, Path] = {}
+    for seg in timeline:
+        slug = seg.profile.slug
+        if slug in panels_by_slug:
+            continue
+        try:
+            photo_bytes = seg.profile.image_path.read_bytes()
+        except OSError as exc:
+            logger.warning(
+                "Player timeline: falha ao ler foto de %s (%s); pulando segmento",
+                slug, exc,
+            )
+            continue
+        panels_by_slug[slug] = compose_player_panel(
+            photo_bytes=photo_bytes,
+            player_display_name=seg.profile.display_name,
+            width=_CANVAS_W,
+            height=top_h,
+        )
+
+    if len(panels_by_slug) < 2:
+        # Defensivo — se a leitura falhou em N-1 dos slugs, melhor cair pro fluxo
+        # estático (caller já tratou len<2 antes, mas mantemos a guarda).
+        band_path.unlink(missing_ok=True)
+        for p in panels_by_slug.values():
+            p.unlink(missing_ok=True)
+        raise ValueError("Player timeline degenerou pra <2 painéis após leitura — caller deve usar fluxo estático")
+
+    src_w, src_h = _probe_video_dimensions(clip_path)
+    face_y_norm = _detect_face_y_norm(clip_path)
+    speaker_crop = _build_bottom_crop_filter(
+        src_w=src_w, src_h=src_h, target_w=_CANVAS_W, target_h=bottom_h,
+        face_y_norm=face_y_norm,
+    )
+
+    # Ordem dos slugs nos inputs ffmpeg (1 = band, 2..N = painéis).
+    ordered_slugs = list(panels_by_slug.keys())
+    slug_to_input_idx = {slug: 2 + i for i, slug in enumerate(ordered_slugs)}
+
+    filter_parts: list[str] = [
+        f"color=c=black:size={_CANVAS_W}x{_CANVAS_H}[base]",
+        f"[0:v]{speaker_crop}[speaker]",
+        f"[1:v]scale={_CANVAS_W}:{band_h}[band]",
+    ]
+    # Speaker em cima, band logo abaixo (y=bottom_h).
+    filter_parts.append("[base][speaker]overlay=0:0[step0]")
+    filter_parts.append(f"[step0][band]overlay=0:{bottom_h}[step1]")
+
+    # Cada segmento da timeline overlay=enable=between(t,start,end) sobre a
+    # região do painel (y = bottom_h + band_h). Ordem temporal já vem ordenada
+    # do builder; cada overlay zera fora do seu intervalo, mantendo o fundo
+    # preto — o que é OK porque o intervalo seguinte cobre o próximo trecho.
+    panel_y = bottom_h + band_h
+    accum = "step1"
+    for i, seg in enumerate(timeline):
+        slug = seg.profile.slug
+        if slug not in slug_to_input_idx:
+            continue
+        input_idx = slug_to_input_idx[slug]
+        enable = rf"between(t\,{seg.start:.3f}\,{seg.end:.3f})"
+        next_tag = f"pseg{i}"
+        filter_parts.append(
+            f"[{accum}][{input_idx}:v]overlay=0:{panel_y}:enable={enable}[{next_tag}]"
+        )
+        accum = next_tag
+
+    filter_parts.append(f"[{accum}]null[v]")
+    filter_complex = ";".join(filter_parts)
+
+    output_path = clip_path.with_stem(clip_path.stem + "_social")
+    cmd: list[str] = [
+        "ffmpeg",
+        "-i", str(clip_path),         # 0: clip framed pro speaker
+        "-loop", "1", "-i", str(band_path),  # 1: band
+    ]
+    for slug in ordered_slugs:
+        cmd.extend(["-loop", "1", "-i", str(panels_by_slug[slug])])
+    cmd.extend([
+        "-filter_complex", filter_complex,
+        "-map", "[v]",
+        "-map", "0:a?",
+        "-c:v", "libx264",
+        "-c:a", "aac",
+        "-shortest",
+        "-y",
+        str(output_path),
+    ])
+
+    logger.info(
+        "Social composer (player_timeline): %d segmento(s), %d jogador(es) — render %s",
+        len(timeline), len(ordered_slugs), output_path.name,
+    )
+    try:
+        subprocess.run(cmd, check=True, capture_output=True)
+    except subprocess.CalledProcessError as exc:
+        stderr = exc.stderr.decode("utf-8", errors="replace")
+        logger.error("Social composer (player_timeline) falhou (código %d): %s", exc.returncode, stderr)
+        raise
+    finally:
+        band_path.unlink(missing_ok=True)
+        for p in panels_by_slug.values():
+            p.unlink(missing_ok=True)
+
     return output_path
 
 
@@ -718,12 +901,31 @@ def _render_social_header_image(
     inverted: bool = False,
     player_images: list[bytes] | None = None,
     presenter_images: list[bytes] | None = None,
+    player_panel_subject: tuple[str, bytes] | None = None,
 ) -> Path:
-    top_image_path = generate_social_top_image(
-        clip, output_dir, clip_path, config,
-        player_images=player_images,
-        presenter_images=presenter_images,
+    # Modo "foto local no painel inferior": pula a IA e usa diretamente a
+    # foto do jogador mais citado. Só faz sentido no fluxo inverted=True
+    # (--futebol) onde o painel da imagem fica embaixo.
+    use_local_player_panel = (
+        config.player_panel_use_local
+        and inverted
+        and player_panel_subject is not None
     )
+    if use_local_player_panel:
+        from youcut.player_panel import compose_player_panel
+        display_name, photo_bytes = player_panel_subject  # type: ignore[misc]
+        top_image_path = compose_player_panel(
+            photo_bytes=photo_bytes,
+            player_display_name=display_name,
+            width=width,
+            height=top_height,
+        )
+    else:
+        top_image_path = generate_social_top_image(
+            clip, output_dir, clip_path, config,
+            player_images=player_images,
+            presenter_images=presenter_images,
+        )
     fallback_path = _render_social_header_image_local(
         top_image_path=top_image_path,
         title=title,

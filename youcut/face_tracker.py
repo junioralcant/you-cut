@@ -179,6 +179,29 @@ def _detect_faces_in_frame(frame, detector) -> list[_BBox]:
     return boxes
 
 
+def _filter_bboxes_by_roi(
+    boxes: list[_BBox],
+    roi: tuple[int, int, int, int] | None,
+) -> list[_BBox]:
+    """Descarta bboxes cujo centro cai fora da ROI (x,y,w,h em px).
+
+    Sem ROI configurada, devolve a lista intacta. Útil quando o source tem
+    rostos "distratores" (cards centrais com imagem de pessoa, banners) que
+    o detector pega por engano.
+    """
+    if roi is None:
+        return boxes
+    rx, ry, rw, rh = roi
+    rx2, ry2 = rx + rw, ry + rh
+    kept: list[_BBox] = []
+    for b in boxes:
+        cx = b.x + b.w // 2
+        cy = b.y + b.h // 2
+        if rx <= cx <= rx2 and ry <= cy <= ry2:
+            kept.append(b)
+    return kept
+
+
 def _make_face_detector(min_confidence: float):
     """Instantiate a MediaPipe FaceDetection detector."""
     import mediapipe as mp  # type: ignore[import]
@@ -512,6 +535,7 @@ def _analyze_clip_for_static_crop(
         else:
             faces = _detect_faces_with_opencv(frame)
 
+        faces = _filter_bboxes_by_roi(faces, config.face_detection_roi)
         valid = [f for f in faces if f.w >= _MIN_FACE_DIM_PX and f.h >= _MIN_FACE_DIM_PX]
         if valid:
             all_faces.extend(valid)
@@ -683,14 +707,36 @@ def _run_face_tracking(clip_path: Path, config: PipelineConfig) -> Path:
 
         if frame_idx % 30 == 0:
             faces = _detect_faces_in_frame(frame, detector)
+            faces = _filter_bboxes_by_roi(faces, config.face_detection_roi)
             logger.info("Face tracking: %d rostos detectados no frame %d", len(faces), frame_idx)
         else:
             faces = _detect_faces_in_frame(frame, detector)
+            faces = _filter_bboxes_by_roi(faces, config.face_detection_roi)
 
         assignment = _assign_speakers_to_faces(faces, speaker_segments, timestamp, speaker_order)
 
         if len(assignment) == 2 and speaker_order is None:
             speaker_order = list(assignment.keys())
+
+        # Round-robin entre 2 rostos: usado quando não há diarização real e
+        # queremos um close alternado (em vez de split-screen). A escolha é
+        # determinística por timestamp — ordena os 2 rostos por posição
+        # vertical (y) e alterna a cada chunk de N segundos.
+        if (
+            config.face_alternate_chunk_s > 0
+            and len(assignment) == 2
+        ):
+            chunk_idx = int(timestamp / config.face_alternate_chunk_s)
+            sorted_boxes = sorted(assignment.values(), key=lambda b: b.y)
+            picked = sorted_boxes[chunk_idx % 2]
+            roi = _compute_single_speaker_roi(picked, frame_w, frame_h)
+            frame_regions.append(roi)
+            secondary_regions.append(None)
+            is_split_screen.append(False)
+            last_region = roi
+            had_faces = True
+            frame_idx += 1
+            continue
 
         if len(assignment) == 2:
             speakers = list(assignment.keys())

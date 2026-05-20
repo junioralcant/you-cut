@@ -37,6 +37,20 @@ class PipelineConfig(BaseSettings):
     face_tracking: bool = False
     huggingface_token: str | None = None
     face_detection_confidence: float = 0.5
+    # ROI absoluta (x,y,w,h em px do frame source) onde procurar rostos.
+    # Quando setado, detecções cujo centro cai fora da caixa são descartadas
+    # — útil quando o source tem rostos "distratores" (ex: imagem de pessoa
+    # famosa num card central) e os apresentadores ficam só numa coluna.
+    face_detection_roi: tuple[int, int, int, int] | None = None
+    # Quando > 0 e o detector encontra 2 rostos consistentes dentro da ROI,
+    # alterna o speaker entre os dois a cada N segundos em vez de fazer
+    # split-screen. Usado quando não há diarização real disponível.
+    face_alternate_chunk_s: float = 0.0
+    # Quando True, o painel "imagem IA" do layout social usa diretamente a
+    # foto local do jogador detectado (catálogo players_dir) com legenda do
+    # nome, em vez de gerar uma imagem via DALL·E/seedream. Foco em vídeos
+    # editoriais de futebol onde a identidade visual = foto do jogador.
+    player_panel_use_local: bool = False
     thumbnail_text: str = ""
     social_layout_mode: Literal[
         "classic",

@@ -27,3 +27,6 @@ poc/cosmic/
 poc/revenge/
 poc/branding/
 poc/__pycache__/
+
+# Catálogo local de fotos de jogadores (data, não código)
+jogadores_brasil_2026/
